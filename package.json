@@ -1,0 +1,44 @@
+{
+  "name": "pi-factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "spec → implement → review → revise → PR loop for GitHub issues, as a pi-subagents workflow",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/seandavi/pi-factory.git"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/factory.ts"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "workflows",
+    "docs"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "node scripts/check-workflow.mjs"
+  },
+  "dependencies": {
+    "pi-subagents": "^0.80.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
