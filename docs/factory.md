@@ -3,7 +3,7 @@
 An experiment in running issues through a fixed loop of
 [pi-subagents](https://github.com/nicobailon/pi-subagents), with the strong model where judgment
 matters and the fast model where volume does. The script is
-[`.pi/workflows/factory.js`](workflows/factory.js).
+[`workflows/factory.js`](../workflows/factory.js).
 
 | Stage | Model | Agent | Writes | Output |
 |---|---|---|---|---|
@@ -59,6 +59,40 @@ record stays in the PR.
 
 **Never automated:** merging. A human merges, from the main session.
 
+## Installing
+
+The engine is a pi package. Install it on each machine from git main (no tags; `pi update`
+pulls the latest main):
+
+```sh
+pi install git:github.com/seandavi/pi-factory
+```
+
+The package's extension (`extensions/factory.ts`) registers the workflow as the named
+pi-subagents resource **`pi-factory`** in every session. To work on the engine itself, load the
+checkout instead: `pi -e ~/Documents/git/pi-factory/extensions/factory.ts` (after `npm install`
+there); the script is re-read on each session start, so `/reload` picks up edits.
+
+**Named resource, not a path** (verified 2026-10-23 against pi-subagents 0.80.0). pi-subagents
+exports `registerWorkflowResource` from `pi-subagents/workflow-resources` for trusted extensions.
+Its registry lives on `globalThis` under `Symbol.for("pi-subagents.workflow-resources.v1")`, so the
+copy this package depends on registers into the registry of the copy pi loaded, even though pi
+gives each package its own module root. What that means in practice:
+
+- Registration is per session: `session_start` registers, `session_shutdown` disposes.
+- `resolve` must be synchronous with no I/O. The extension reads `workflows/factory.js` on
+  `session_start` and `resolve` validates the args (`src/resource.ts`) and returns that text.
+  Bad args fail before any child starts, with every problem listed.
+- The script still sees the caller's `args`; receipts record the resource name and version as
+  provenance; `options.reuseFrom` resumes a named run.
+- If a future pi-subagents changes the registry version, launches fail with "Unknown workflow
+  resource 'pi-factory'". Fallback: pass the installed script's path as `workflow` (raw-script
+  provenance, otherwise identical), then bump the `pi-subagents` dependency here.
+
+Checks: `npm test` (args validation and a registration round trip through pi-subagents' resolver),
+`npm run check` (the script parses as a sandbox body), and
+`subagent({ action: "validate", workflow: "<path to workflows/factory.js>" })`.
+
 ## Running it
 
 Prepare an isolated worktree for the issue (the workflow sandbox has no shell), then launch:
@@ -71,7 +105,8 @@ git -C ~/Documents/git/bioc-mcp worktree add -b issue-2-scaffold \
 
 ```js
 subagent({
-  workflow: "./.pi/workflows/factory.js",
+  workflow: "pi-factory",
+  async: true,              // required for claude-bridge children on the Mac
   cwd: "~/Documents/git/bioc-mcp",
   args: {
     repo: "seandavi/bioc-mcp", issue: 2, slug: "scaffold",

@@ -1,8 +1,9 @@
 // Factory: spec (Opus) → implement (Sonnet) → review lenses (Opus, parallel)
-// → revise ≤ maxRounds (Sonnet) → PR (Sonnet). See .pi/factory.md.
+// → revise ≤ maxRounds (Sonnet) → PR (Sonnet). See docs/factory.md.
 //
 // args: { repo, issue, slug, worktree, branch, lenses?: string[], maxRounds?: number, seam?: boolean,
 //         startAt?: "spec" | "implement" | "review", parent?: number }
+// (validated before launch by src/resource.ts when run as the named resource "pi-factory"; keep both in step)
 // seam: the change is a shared foundation later issues build on (label `seam`); reviewers
 // then rate inherited defects by blast radius.
 // startAt: skip earlier stages. "implement" needs the spec already committed on the branch;
