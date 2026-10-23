@@ -5,6 +5,10 @@ An experiment in running issues through a fixed loop of
 matters and the fast model where volume does. The script is
 [`workflows/factory.js`](../workflows/factory.js).
 
+![The factory workflow](figures/factory-flow-light.svg)
+
+**Figure 1.** One run; see the [README](../README.md) for the legend.
+
 | Stage | Model | Agent | Writes | Output |
 |---|---|---|---|---|
 | Spec | Opus | `worker` | `docs/specs/<issue>-<slug>.md`, one commit | `{status, spec_path, blocking_questions}` |

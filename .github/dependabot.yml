@@ -1,0 +1,18 @@
+# Monthly and grouped, to keep review load low. pi-subagents matters most: the package registers
+# its workflow through pi-subagents' shared registry (docs/factory.md#installing).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

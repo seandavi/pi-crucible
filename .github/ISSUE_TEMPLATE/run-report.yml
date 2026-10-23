@@ -1,0 +1,39 @@
+name: Factory run report
+description: What one factory run did, for the experiment's record (docs/factory.md, "What to watch").
+labels: [run-report]
+body:
+  - type: input
+    id: pr
+    attributes:
+      label: PR
+      description: The PR the run opened or updated (owner/repo#n).
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - PR ready, merged without hand edits
+        - PR ready, merged after hand edits
+        - Draft PR (unresolved findings or failing checks)
+        - Stopped at spec (blocking questions)
+        - Stopped at implement (blocked)
+        - Failed (error, not a stop)
+    validations:
+      required: true
+  - type: textarea
+    id: findings
+    attributes:
+      label: Review findings
+      description: Which findings led to a real change, and which only restated the spec? Did round two happen, and did it converge?
+  - type: textarea
+    id: outside
+    attributes:
+      label: Work done outside the factory
+      description: Anything fixed by hand after the run. Each item is a gap in the loop.
+  - type: textarea
+    id: cost
+    attributes:
+      label: Time and tokens
+      description: Per stage, from the run receipts, if you have them.
