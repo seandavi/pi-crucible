@@ -1,0 +1,29 @@
+name: Engine change
+description: Propose a change to the stages, prompts, lenses, package or launcher.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What goes wrong or is missing today? Link the runs, PRs or findings that show it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The change, and why it belongs in the shared engine rather than one repo's config.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How we will know it worked.
+  - type: checkboxes
+    id: seam
+    attributes:
+      label: Blast radius
+      options:
+        - label: Other issues or every consuming repo will build on this (add the `seam` label).

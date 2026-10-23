@@ -1,0 +1,31 @@
+name: Bug
+description: The engine, the package or the docs do something wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: stage
+    attributes:
+      label: Stage
+      description: launch, spec, implement, review, revise, PR, flag, or install/package.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >
+        The subagent run id, receipt or error text, and the PR or issue the run touched.
+        Remove secrets first.
+      render: text
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: "Engine commit (git -C ~/.pi/agent/git/github.com/seandavi/pi-factory rev-parse --short HEAD), pi --version, pi-subagents version."
+    validations:
+      required: true
