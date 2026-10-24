@@ -1,14 +1,14 @@
-// Writes schema/factory.schema.json from the TypeBox schema in src/config.ts (npm run schema).
+// Writes schema/crucible.schema.json from the TypeBox schema in src/config.ts (npm run schema).
 import { writeFileSync } from "node:fs";
-import { FactoryFile } from "../src/config.ts";
+import { CrucibleFile } from "../src/config.ts";
 
-export const SCHEMA_PATH = new URL("../schema/factory.schema.json", import.meta.url);
+export const SCHEMA_PATH = new URL("../schema/crucible.schema.json", import.meta.url);
 
 export function schemaText(): string {
-  return JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", ...FactoryFile }, null, 2) + "\n";
+  return JSON.stringify({ $schema: "https://json-schema.org/draft/2020-12/schema", ...CrucibleFile }, null, 2) + "\n";
 }
 
 if (import.meta.main) {
   writeFileSync(SCHEMA_PATH, schemaText());
-  console.log("wrote schema/factory.schema.json");
+  console.log("wrote schema/crucible.schema.json");
 }

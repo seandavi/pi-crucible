@@ -1,5 +1,5 @@
-name: Factory run report
-description: What one factory run did, for the experiment's record (docs/factory.md, "What to watch").
+name: Run report
+description: What one run did, for the experiment's record (docs/crucible.md, "What to watch").
 labels: [run-report]
 body:
   - type: input
@@ -30,7 +30,7 @@ body:
   - type: textarea
     id: outside
     attributes:
-      label: Work done outside the factory
+      label: Work done outside pi-crucible
       description: Anything fixed by hand after the run. Each item is a gap in the loop.
   - type: textarea
     id: cost

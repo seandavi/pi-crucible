@@ -26,6 +26,6 @@ body:
     id: versions
     attributes:
       label: Versions
-      description: "Engine commit (git -C ~/.pi/agent/git/github.com/seandavi/pi-factory rev-parse --short HEAD), pi --version, pi-subagents version."
+      description: "Engine commit (git -C ~/.pi/agent/git/github.com/seandavi/pi-crucible rev-parse --short HEAD), pi --version, pi-subagents version."
     validations:
       required: true

@@ -1,7 +1,7 @@
-// The /factory command's logic: from "/factory 12" in a repo checkout to the workflow's args.
+// The /crucible command's logic: from "/crucible 12" in a repo checkout to the workflow's args.
 //
-//   parseCommand  "/factory" arguments → issue number and options
-//   prepare       fetches origin; reads .pi/factory.json from origin/main, the issue, its branch and the engine commit; plans the launch
+//   parseCommand  "/crucible" arguments → issue number and options
+//   prepare       fetches origin; reads .pi/crucible.json from origin/main, the issue, its branch and the engine commit; plans the launch
 //   ensureWorktree creates (or reuses) the issue's worktree and branch
 //
 // Side effects go through an injected `exec`, so tests can run without git, gh or a network.
@@ -10,7 +10,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { engineConfigOf, factoryFileErrors, type FactoryFile } from "./config.ts";
+import { engineConfigOf, crucibleFileErrors, type CrucibleFile } from "./config.ts";
 import { argErrors } from "./resource.ts";
 
 export type Exec = (
@@ -30,9 +30,9 @@ export interface CommandOptions {
 }
 
 export const USAGE =
-  "Usage: /factory <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]";
+  "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]";
 
-/** Parse the text after "/factory". Returns an error message instead of throwing. */
+/** Parse the text after "/crucible". Returns an error message instead of throwing. */
 export function parseCommand(input: string): CommandOptions | { error: string } {
   const words = input.trim().split(/\s+/).filter(Boolean);
   const out: CommandOptions = { issue: 0, startAt: "spec", lenses: [], dryRun: false };
@@ -74,7 +74,7 @@ export function slugify(title: string): string {
 }
 
 /** Lenses for a run: the defaults, plus each `review:<lens>` label, plus --lens; seam from the label. */
-export function pickLenses(file: FactoryFile, labels: string[], extra: string[]) {
+export function pickLenses(file: CrucibleFile, labels: string[], extra: string[]) {
   const defined = Object.keys(file.lenses);
   const wanted = [...(file.defaultLenses ?? ["code"])];
   const warnings: string[] = [];
@@ -82,7 +82,7 @@ export function pickLenses(file: FactoryFile, labels: string[], extra: string[])
     const m = /^review:(.+)$/.exec(label);
     if (!m) continue;
     if (defined.includes(m[1])) wanted.push(m[1]);
-    else warnings.push(`label ${label} names no lens in .pi/factory.json; ignored`);
+    else warnings.push(`label ${label} names no lens in .pi/crucible.json; ignored`);
   }
   for (const lens of extra) {
     if (!defined.includes(lens)) throw new Error(`--lens ${lens}: no such lens (defined: ${defined.join(", ")})`);
@@ -95,12 +95,12 @@ export function expandHome(p: string, home = homedir()): string {
   return p === "~" ? home : p.startsWith("~/") ? path.join(home, p.slice(2)) : p;
 }
 
-export function worktreeRootFor(file: FactoryFile, repoRoot: string, home = homedir()): string {
+export function worktreeRootFor(file: CrucibleFile, repoRoot: string, home = homedir()): string {
   const root = file.worktreeRoot ? expandHome(file.worktreeRoot, home) : `../${path.basename(repoRoot)}-worktrees`;
   return path.resolve(repoRoot, root);
 }
 
-export function worktreeFor(file: FactoryFile, repoRoot: string, issue: number, home = homedir()): string {
+export function worktreeFor(file: CrucibleFile, repoRoot: string, issue: number, home = homedir()): string {
   return path.join(worktreeRootFor(file, repoRoot, home), `issue-${issue}`);
 }
 
@@ -129,7 +129,7 @@ export interface Plan {
 }
 
 export function planLaunch(input: {
-  file: FactoryFile;
+  file: CrucibleFile;
   repoRoot: string;
   repo: string;
   issue: Issue;
@@ -162,7 +162,7 @@ export function planLaunch(input: {
   const errors = argErrors(args);
   if (errors.length) throw new Error(`the planned args are invalid: ${errors.join("; ")}`);
   const size = Buffer.byteLength(JSON.stringify(args));
-  if (size > 16 * 1024) throw new Error(`args are ${size} bytes; pi-subagents allows 16384. Shorten lens texts in .pi/factory.json.`);
+  if (size > 16 * 1024) throw new Error(`args are ${size} bytes; pi-subagents allows 16384. Shorten lens texts in .pi/crucible.json.`);
   return { repoRoot, worktree, branch, startAt: options.startAt, configSource: input.configSource, args, warnings };
 }
 
@@ -191,17 +191,17 @@ export async function findIssueBranch(exec: Exec, repoRoot: string, worktree: st
 }
 
 /** Lines of `gh label create` for the labels a repository lacks; the engine flags every stop with needs:human. */
-export function labelProblems(file: FactoryFile, repo: string, existing: string[]) {
+export function labelProblems(file: CrucibleFile, repo: string, existing: string[]) {
   const have = new Set(existing.map((l) => l.toLowerCase()));
   const create = (name: string) => `gh label create '${name}' -R ${repo}`;
   const errors: string[] = [];
   const warnings: string[] = [];
   if (!have.has("needs:human")) {
-    errors.push(`${repo} has no "needs:human" label, which the factory puts on every stop and every PR. Create it: ${create("needs:human")}`);
+    errors.push(`${repo} has no "needs:human" label, which pi-crucible puts on every stop and every PR. Run /crucible init to create the labels (or: ${create("needs:human")}).`);
   }
   const optional = ["seam", ...Object.keys(file.lenses).filter((l) => l !== "code").map((l) => `review:${l}`)];
   const missing = optional.filter((l) => !have.has(l));
-  if (missing.length) warnings.push(`${repo} lacks the label(s) ${missing.join(", ")}, so issues cannot ask for them. Create: ${missing.map(create).join("; ")}`);
+  if (missing.length) warnings.push(`${repo} lacks the label(s) ${missing.join(", ")}, so issues cannot ask for them. /crucible init creates them.`);
   return { errors, warnings };
 }
 
@@ -219,24 +219,26 @@ export async function engineCommit(exec: Exec, packageRoot: string) {
 export interface LoadedConfig {
   /** The parsed JSON, not yet validated. */
   file: unknown;
-  /** Where it came from, for messages: "origin/main:.pi/factory.json (abc1234)" or "<path> (working tree)". */
+  /** Where it came from, for messages: "origin/main:.pi/crucible.json (abc1234)" or "<path> (working tree)". */
   source: string;
   warnings: string[];
 }
 
+/** Config file names, newest first: `.pi/factory.json` is the name before the rename to pi-crucible (#23). */
+export const CONFIG_NAMES = [".pi/crucible.json", ".pi/factory.json"];
+
 /**
- * The repository's .pi/factory.json as origin/main has it, so a run uses the config reviewed on main
- * rather than whatever the main checkout has checked out. Falls back to the main checkout's working
- * tree only when origin/main has no such file (a repository's first config PR) or there is no
- * origin/main. Call it after fetching origin.
+ * The repository's config as origin/main has it, so a run uses the config reviewed on main rather
+ * than whatever the main checkout has checked out. Falls back to the main checkout's working tree
+ * only when origin/main has no config (a repository's first config PR) or there is no origin/main.
+ * Each place is tried with the current name first, then the legacy one (with a warning).
+ * Call it after fetching origin.
  */
-export async function readFactoryFile(
+export async function readCrucibleFile(
   exec: Exec,
   repoRoot: string,
   readText: (p: string) => Promise<string>,
 ): Promise<LoadedConfig> {
-  const configPath = path.join(repoRoot, ".pi", "factory.json");
-  const local = await readText(configPath).catch((e: Error) => e);
   const parse = (text: string, source: string) => {
     try {
       return JSON.parse(text) as unknown;
@@ -244,32 +246,46 @@ export async function readFactoryFile(
       throw new Error(`cannot parse ${source}: ${(e as Error).message}`);
     }
   };
+  const legacy = (name: string) =>
+    name === CONFIG_NAMES[0] ? [] : [`${name} is the old name; rename it to ${CONFIG_NAMES[0]} (pi-factory is now pi-crucible).`];
   const main = await exec("git", ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], { cwd: repoRoot });
   const commit = main.code === 0 ? main.stdout.trim() : "";
-  const onMain = commit !== "" && (await exec("git", ["cat-file", "-e", `${commit}:.pi/factory.json`], { cwd: repoRoot })).code === 0;
-  if (onMain) {
-    const source = `origin/main:.pi/factory.json (${commit.slice(0, 7)})`;
-    const text = await run(exec, "git", ["cat-file", "blob", `${commit}:.pi/factory.json`], repoRoot);
-    const warnings =
-      typeof local === "string" && local.trim() !== text
-        ? [`${configPath} differs from ${source}; this run uses origin/main's. Merge the change to main to use it.`]
-        : [];
-    return { file: parse(text, source), source, warnings };
+  if (commit) {
+    for (const name of CONFIG_NAMES) {
+      if ((await exec("git", ["cat-file", "-e", `${commit}:${name}`], { cwd: repoRoot })).code !== 0) continue;
+      const source = `origin/main:${name} (${commit.slice(0, 7)})`;
+      const text = await run(exec, "git", ["cat-file", "blob", `${commit}:${name}`], repoRoot);
+      const local = await readText(path.join(repoRoot, name)).catch(() => null);
+      const differs =
+        typeof local === "string" && local.trim() !== text
+          ? [`${path.join(repoRoot, name)} differs from ${source}; this run uses origin/main's. Merge the change to main to use it.`]
+          : [];
+      return { file: parse(text, source), source, warnings: [...legacy(name), ...differs] };
+    }
   }
-  const why = commit ? "origin/main has no .pi/factory.json" : "there is no origin/main";
-  if (typeof local !== "string") throw new Error(`no config to read: ${why}, and reading ${configPath} failed (${local.message})`);
-  const source = `${configPath} (working tree)`;
-  return {
-    file: parse(local, source),
-    source,
-    warnings: [`${why}; using ${source}, which has not been reviewed on main. Merge it to main.`],
-  };
+  const why = commit ? `origin/main has no ${CONFIG_NAMES[0]}` : "there is no origin/main";
+  const failures: string[] = [];
+  for (const name of CONFIG_NAMES) {
+    const configPath = path.join(repoRoot, name);
+    const local = await readText(configPath).catch((e: Error) => e);
+    if (typeof local !== "string") {
+      failures.push(`${configPath}: ${local.message}`);
+      continue;
+    }
+    const source = `${configPath} (working tree)`;
+    return {
+      file: parse(local, source),
+      source,
+      warnings: [...legacy(name), `${why}; using ${source}, which has not been reviewed on main. Merge it to main.`],
+    };
+  }
+  throw new Error(`no config to read: ${why}, and ${failures.join("; ")}. Run /crucible init, or see docs/crucible.md.`);
 }
 
 export const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 export async function prepare(exec: Exec, cwd: string, options: CommandOptions, readText = (p: string) => readFile(p, "utf8")): Promise<Plan> {
-  // The main checkout, even when /factory runs inside one of its worktrees: worktreeRoot is
+  // The main checkout, even when /crucible runs inside one of its worktrees: worktreeRoot is
   // relative to it, and new worktrees must not nest inside old ones.
   const commonDir = await run(exec, "git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd).catch(() => {
     throw new Error(`${cwd} is not inside a git repository`);
@@ -281,13 +297,13 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   await run(exec, "git", ["fetch", "origin"], repoRoot).catch((e: Error) =>
     fetchWarning.push(`could not fetch origin (${e.message}); the config and the branch lookup used local refs`),
   );
-  const loaded = await readFactoryFile(exec, repoRoot, readText);
-  const problems = factoryFileErrors(loaded.file);
+  const loaded = await readCrucibleFile(exec, repoRoot, readText);
+  const problems = crucibleFileErrors(loaded.file);
   if (problems.length) throw new Error(`${loaded.source} is invalid:\n- ${problems.join("\n- ")}`);
-  const config = loaded.file as FactoryFile;
+  const config = loaded.file as CrucibleFile;
 
   const repo = config.repo ?? repoFromRemote(await run(exec, "git", ["remote", "get-url", "origin"], repoRoot));
-  if (!repo) throw new Error('cannot tell the GitHub repo from the origin remote; set "repo" in .pi/factory.json');
+  if (!repo) throw new Error('cannot tell the GitHub repo from the origin remote; set "repo" in .pi/crucible.json');
 
   const raw = JSON.parse(
     await run(exec, "gh", ["issue", "view", String(options.issue), "-R", repo, "--json", "number,title,state,labels"]),

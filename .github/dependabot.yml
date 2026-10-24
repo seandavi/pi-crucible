@@ -1,5 +1,5 @@
 # Monthly and grouped, to keep review load low. pi-subagents matters most: the package registers
-# its workflow through pi-subagents' shared registry (docs/factory.md#installing).
+# its workflow through pi-subagents' shared registry (docs/crucible.md#installing).
 version: 2
 updates:
   - package-ecosystem: npm

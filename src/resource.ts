@@ -1,8 +1,8 @@
-// The factory as a named pi-subagents workflow resource: `subagent({ workflow: "pi-factory", args })`.
+// The engine as a named pi-subagents workflow resource: `subagent({ workflow: "pi-crucible", args })`.
 //
 // pi-subagents calls `resolve` synchronously with core-validated plain-JSON args (≤ 16 KiB, ≤ 16
 // fields per object) and runs only the script it returns: for a named resource the sandbox's `args`
-// is empty, so resolve prepends the validated args as `const FACTORY_ARGS = {...};` and the script
+// is empty, so resolve prepends the validated args as `const CRUCIBLE_ARGS = {...};` and the script
 // reads them from there. resolve may not do I/O, so the extension reads the script once per session
 // and hands it in here.
 
@@ -10,11 +10,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { engineConfigErrors } from "./config.ts";
 
-export const RESOURCE_NAME = "pi-factory";
-export const RESOURCE_VERSION = 2; // 2: args are prepended to the script (FACTORY_ARGS)
+export const RESOURCE_NAME = "pi-crucible";
+/** The name before the rename to pi-crucible (#23); still registered so old launches resolve. */
+export const LEGACY_RESOURCE_NAME = "pi-factory";
+// 2: args are prepended to the script; 3: renamed (pi-crucible, CRUCIBLE_ARGS).
+export const RESOURCE_VERSION = 3;
 
 /** The workflow script shipped with this package. */
-export const SCRIPT_URL = new URL("../workflows/factory.js", import.meta.url);
+export const SCRIPT_URL = new URL("../workflows/crucible.js", import.meta.url);
 
 export function loadScript(url: URL = SCRIPT_URL): string {
   return readFileSync(url, "utf8");
@@ -30,7 +33,7 @@ const UNSAFE_PATH_CHARS = /[\x00-\x1f\x7f`$\\"';|&<>(){}*?!~]/;
 const isPositiveInt = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 const str: Check = (v) => (typeof v === "string" && v.trim() ? null : "must be a non-empty string");
 
-// One entry per argument the script reads. Keep in step with the args comment in factory.js.
+// One entry per argument the script reads. Keep in step with the args comment in crucible.js.
 const FIELDS: Record<string, { required: boolean; check: Check }> = {
   repo: {
     required: true,
@@ -119,14 +122,14 @@ export function argErrors(args: Args): string[] {
 }
 
 /** The resource definition for registerWorkflowResource, closed over an already-read script. */
-export function factoryResource(script: string) {
+export function crucibleResource(script: string, name: string = RESOURCE_NAME) {
   return {
-    name: RESOURCE_NAME,
+    name,
     version: RESOURCE_VERSION,
     resolve(args: Args): { script: string } | { error: string } {
       const errors = argErrors(args);
-      if (errors.length) return { error: `pi-factory: ${errors.join("; ")}.` };
-      return { script: `const FACTORY_ARGS = ${JSON.stringify(args)};\n${script}` };
+      if (errors.length) return { error: `pi-crucible: ${errors.join("; ")}.` };
+      return { script: `const CRUCIBLE_ARGS = ${JSON.stringify(args)};\n${script}` };
     },
   };
 }

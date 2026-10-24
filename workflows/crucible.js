@@ -1,14 +1,14 @@
-// Factory: spec (Opus) → implement (Sonnet) → [diff (Haiku) → review lenses (Opus, parallel)]
-// → revise ≤ maxRounds (Sonnet) → integrate (Haiku; one Sonnet fix round) → PR (Sonnet). See docs/factory.md.
+// pi-crucible: spec (Opus) → implement (Sonnet) → [diff (Haiku) → review lenses (Opus, parallel)]
+// → revise ≤ maxRounds (Sonnet) → integrate (Haiku; one Sonnet fix round) → PR (Sonnet). See docs/crucible.md.
 //
 // args: { repo, issue, slug, worktree, branch, config, lenses?: string[], maxRounds?: number,
 //         seam?: boolean, startAt?: "spec" | "implement" | "review", parent?: number,
 //         engine?: { commit, dirty? } }
-// (validated before launch by src/resource.ts when run as the named resource "pi-factory"; keep both in step)
-// config: the engine part of the repo's .pi/factory.json (src/config.ts): design sources, lens texts,
+// (validated before launch by src/resource.ts when run as the named resource "pi-crucible"; keep both in step)
+// config: the engine part of the repo's .pi/crucible.json (src/config.ts): design sources, lens texts,
 // skills, checks and stage guidance. Everything project-specific comes from there; this script
-// holds none of it. The /factory command builds all of these args.
-// engine: the pi-factory commit that launched the run, recorded in the PR for provenance.
+// holds none of it. The /crucible command builds all of these args.
+// engine: the pi-crucible commit that launched the run, recorded in the PR for provenance.
 // seam: the change is a shared foundation later issues build on (label `seam`); reviewers
 // then rate inherited defects by blast radius.
 // startAt: skip earlier stages. "implement" needs the spec already committed on the branch;
@@ -17,13 +17,13 @@
 // The caller creates `worktree` on `branch` before launching; every stage runs there.
 // Whenever the run stops for a person, the issue or PR gets the `needs:human` label.
 
-// Launched by name (the pi-factory resource, as /factory does), pi-subagents gives the args only to
-// the resource's resolve, which prepends them to this script as FACTORY_ARGS. Launched by path, they
+// Launched by name (the pi-crucible resource, as /crucible does), pi-subagents gives the args only to
+// the resource's resolve, which prepends them to this script as CRUCIBLE_ARGS. Launched by path, they
 // are the sandbox's `args`.
-const input = typeof FACTORY_ARGS !== "undefined" ? FACTORY_ARGS : args;
+const input = typeof CRUCIBLE_ARGS !== "undefined" ? CRUCIBLE_ARGS : args;
 
 const config = input.config;
-if (!config) throw new Error("args.config is required: launch with /factory, or pass the engine part of .pi/factory.json");
+if (!config) throw new Error("args.config is required: launch with /crucible, or pass the engine part of .pi/crucible.json");
 const models = config.models || {};
 const OPUS = models.strong || "claude-bridge/claude-opus-5-5";
 const SONNET = models.fast || "claude-bridge/claude-sonnet-5-5";
@@ -55,13 +55,15 @@ it yet.`
 const specPath = `${config.specDir || "docs/specs"}/${issue}-${input.slug}.md`;
 // Where the diff step writes the diff each review round reads; its .gitignore ("*") keeps the
 // directory out of git without touching the repository's own ignore files.
-const REVIEW_DIR = ".pi/factory-review";
+const REVIEW_DIR = ".pi/crucible-review";
 const diffFile = (round) => `${REVIEW_DIR}/r${round}.diff`;
 const CHECKS = config.checks;
-const checkList = CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n");
+const checkList = CHECKS.length
+  ? CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n")
+  : "  (none configured: say so in summary, and in the PR say \"no checks configured\")";
 const engineNote = input.engine && input.engine.commit
-  ? `seandavi/pi-factory@${input.engine.commit}${input.engine.dirty ? " (with uncommitted changes)" : ""}`
-  : "unknown (launched without /factory)";
+  ? `seandavi/pi-crucible@${input.engine.commit}${input.engine.dirty ? " (with uncommitted changes)" : ""}`
+  : "unknown (launched without /crucible)";
 // Single-quoted for the shell, so nothing in the configured identity is expanded.
 const shellQuote = (text) => `'${String(text).replace(/'/g, "'\\''")}'`;
 const gitAs = config.commitAuthor
@@ -140,7 +142,7 @@ if the repository already has the label):
   gh issue edit ${issue} -R ${repo} --add-label ${NEEDS_HUMAN}
 then post this as a comment on the issue with gh issue comment ${issue} -R ${repo} --body-file -:
 
-The factory stopped and needs a human.
+pi-crucible stopped and needs a human.
 
 ${why}`,
   });
@@ -250,7 +252,7 @@ report status "blocked" and put the command and its error in summary.`,
 }
 
 // What a round's reviewers get: the diff file and git's list of changed files, or why there is
-// none. `record` is the round's entry in the PR's factory record.
+// none. `record` is the round's entry in the PR's crucible record.
 function diffFor(result, round) {
   const out = result.structuredOutput || {};
   if (result.ok && out.status === "done") {
@@ -464,7 +466,7 @@ const integrationPassed = (out) => out.merge !== "conflict" && CHECKS.every((c) 
 const failingChecks = (out) => CHECKS.filter((c) => (out.checks || {})[c.name] !== "pass").map((c) => c.name);
 const reason = (result) => String((result.structuredOutput || {}).summary || result.error || "no structured output").slice(0, 200);
 
-// The PR's factory record and the run's result: what integration did.
+// The PR's crucible record and the run's result: what integration did.
 const integration = { status: "pass", main: null, merge: null, conflicts: [], failing: [], checks: {}, fix: null, reReview: null, note: "" };
 const first = await integrateRun("integrate", false);
 const firstOut = first.structuredOutput || {};
@@ -590,7 +592,7 @@ You are the PR stage. Do not change code.
    gh api -X POST repos/${repo}/issues/${parent}/sub_issues -F sub_issue_id=$(gh api repos/${repo}/issues/<new number> --jq .id)` : ""}` : "There are no minor/nit findings; skip this step and report followup_issue null."}
 3. Write the PR body (to a file, then --body-file):
    - "Closes #${issue}" and a short summary from ${specPath}.
-   - "Factory record": a table with one row per review round (round, lenses, the diff the
+   - "Crucible record": a table with one row per review round (round, lenses, the diff the
      reviewers read, blocking findings, what was fixed or declined, one line each; a row with
      "after": "integration fix" is the code lens re-reviewing the integration fix) from
      ${JSON.stringify(history)}; then an "Integration" line from ${JSON.stringify(integration)}:

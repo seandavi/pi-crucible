@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/seandavi/pi-factory/main/schema/factory.schema.json",
+  "$schema": "https://raw.githubusercontent.com/seandavi/pi-crucible/main/schema/crucible.schema.json",
   "worktreeRoot": "../bioc-support-archive-worktrees",
   "design": "The design record for the whole project is README.md plus the ADRs in docs/adr/; a change that contradicts an ADR must say so in its spec.",
   "seamNote": "the export query, the page templates, the URL scheme, the Worker",

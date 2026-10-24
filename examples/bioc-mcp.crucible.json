@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/seandavi/pi-factory/main/schema/factory.schema.json",
+  "$schema": "https://raw.githubusercontent.com/seandavi/pi-crucible/main/schema/crucible.schema.json",
   "worktreeRoot": "../bioc-mcp-worktrees",
   "parent": 1,
   "design": "The design spec for the whole project is https://raw.githubusercontent.com/seandavi/bioc-infrastructure/spec/mcp/proposal-mcp.qmd (fetch it with curl if you need it).",
