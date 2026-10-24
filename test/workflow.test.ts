@@ -10,7 +10,7 @@ type Opts = { agent: string; model: string; task: string; skill?: string; output
 type Answer = { ok?: boolean; structuredOutput?: unknown; error?: string };
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 
-export async function simulate(args: Record<string, unknown>, answer: (key: string, opts: Opts) => Answer) {
+export async function simulate(args: Record<string, unknown>, answer: (key: string, opts: Opts) => Answer, script = loadScript()) {
   const calls: (Opts & { key: string })[] = [];
   const run = async (key: string, opts: Opts) => {
     calls.push({ key, ...opts });
@@ -18,7 +18,7 @@ export async function simulate(args: Record<string, unknown>, answer: (key: stri
     return { ok: a.ok ?? true, structuredOutput: a.structuredOutput, error: a.error };
   };
   const runs = { run, all: (list: (Opts & { key: string })[]) => Promise.all(list.map((o) => run(o.key, o))) };
-  const result = await new AsyncFunction("args", "runs", loadScript())(args, runs);
+  const result = await new AsyncFunction("args", "runs", script)(args, runs);
   return { result, calls, task: (key: string) => calls.find((c) => c.key === key)?.task ?? "" };
 }
 
@@ -236,4 +236,26 @@ test("on --start-at review the reviewers get git's file list", async () => {
   const { calls, task } = await simulate({ ...args, startAt: "review" }, happy());
   assert.deepEqual(calls.map((c) => c.key), ["diff-r0", "review-code-r0", "review-ux-r0", "pr"]);
   assert.ok(task("review-code-r0").includes("Changed files: a.ts, b.ts."));
+});
+
+// The regression behind the first /factory run (2fbd7098): pi-subagents gives a named resource's args
+// only to resolve and starts the sandbox with empty args. Resolve the way the subagent tool does and
+// run the result exactly so.
+test("launched by name, the script gets its args from resolve, not the sandbox", async () => {
+  const { resolveWorkflowResource } = await import(
+    new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
+  );
+  const { registerWorkflowResource } = await import("pi-subagents/workflow-resources");
+  const { factoryResource } = await import("../src/resource.ts");
+  const reg = registerWorkflowResource({ sessionId: "by-name", definition: factoryResource(loadScript()) });
+  try {
+    const { startAt: _unset, ...jsonArgs } = args;
+    const resolved = resolveWorkflowResource("pi-factory", jsonArgs, "by-name");
+    assert.equal(resolved.ok, true, resolved.error);
+    const { result, task } = await simulate({}, happy(), resolved.resource.script);
+    assert.equal(result.pr, "https://github.com/o/r/pull/9");
+    assert.match(task("spec"), /Repository: owner\/repo, issue #2\./);
+  } finally {
+    reg.dispose();
+  }
 });

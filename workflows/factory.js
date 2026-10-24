@@ -17,29 +17,34 @@
 // The caller creates `worktree` on `branch` before launching; every stage runs there.
 // Whenever the run stops for a person, the issue or PR gets the `needs:human` label.
 
-const config = args.config;
+// Launched by name (the pi-factory resource, as /factory does), pi-subagents gives the args only to
+// the resource's resolve, which prepends them to this script as FACTORY_ARGS. Launched by path, they
+// are the sandbox's `args`.
+const input = typeof FACTORY_ARGS !== "undefined" ? FACTORY_ARGS : args;
+
+const config = input.config;
 if (!config) throw new Error("args.config is required: launch with /factory, or pass the engine part of .pi/factory.json");
 const models = config.models || {};
 const OPUS = models.strong || "claude-bridge/claude-opus-5-5";
 const SONNET = models.fast || "claude-bridge/claude-sonnet-5-5";
 const HAIKU = models.small || "claude-bridge/claude-haiku-5-5";
 
-const repo = args.repo;
-const issue = args.issue;
-const cwd = args.worktree;
-const branch = args.branch;
+const repo = input.repo;
+const issue = input.issue;
+const cwd = input.worktree;
+const branch = input.branch;
 // `code` always runs, whatever the caller names; the others are added to it.
-const lenses = Array.from(new Set(["code"].concat(args.lenses || [])));
+const lenses = Array.from(new Set(["code"].concat(input.lenses || [])));
 const LENS = config.lenses;
 const unknownLenses = lenses.filter((l) => !LENS[l]);
 if (unknownLenses.length) throw new Error(`no lens text in config for: ${unknownLenses.join(", ")}`);
-const maxRounds = args.maxRounds || 2;
-const seam = !!args.seam;
+const maxRounds = input.maxRounds || 2;
+const seam = !!input.seam;
 const STAGES = ["spec", "implement", "review"];
-const startAt = args.startAt || "spec";
+const startAt = input.startAt || "spec";
 if (STAGES.indexOf(startAt) < 0) throw new Error(`startAt must be one of ${STAGES.join(", ")}`);
 const stageRuns = (stage) => STAGES.indexOf(startAt) <= STAGES.indexOf(stage);
-const parent = args.parent || null;
+const parent = input.parent || null;
 const NEEDS_HUMAN = "needs:human";
 const SEAM_NOTE = seam
   ? `\nThis change is a SHARED SEAM: later issues build on it${config.seamNote ? ` (${config.seamNote})` : ""}. Rate by blast
@@ -47,15 +52,15 @@ radius, not by current reach: a defect every later caller would inherit or copy 
 be bypassed, a missing validation, a leaky contract) is at least "major", even if nothing reaches
 it yet.`
   : "";
-const specPath = `${config.specDir || "docs/specs"}/${issue}-${args.slug}.md`;
+const specPath = `${config.specDir || "docs/specs"}/${issue}-${input.slug}.md`;
 // Where the diff step writes the diff each review round reads; its .gitignore ("*") keeps the
 // directory out of git without touching the repository's own ignore files.
 const REVIEW_DIR = ".pi/factory-review";
 const diffFile = (round) => `${REVIEW_DIR}/r${round}.diff`;
 const CHECKS = config.checks;
 const checkList = CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n");
-const engineNote = args.engine && args.engine.commit
-  ? `seandavi/pi-factory@${args.engine.commit}${args.engine.dirty ? " (with uncommitted changes)" : ""}`
+const engineNote = input.engine && input.engine.commit
+  ? `seandavi/pi-factory@${input.engine.commit}${input.engine.dirty ? " (with uncommitted changes)" : ""}`
   : "unknown (launched without /factory)";
 // Single-quoted for the shell, so nothing in the configured identity is expanded.
 const shellQuote = (text) => `'${String(text).replace(/'/g, "'\\''")}'`;
@@ -442,7 +447,7 @@ const prOut = pr.structuredOutput || {};
 if (!pr.ok || !prOut.pr_url) {
   const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
   const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
-  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, error: pr.error || null, engine: args.engine || null };
+  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, error: pr.error || null, engine: input.engine || null };
 }
 
 return {
@@ -456,5 +461,5 @@ return {
   unresolved: open,
   followUps: followUps.length,
   followUpIssue: prOut.followup_issue || null,
-  engine: args.engine || null,
+  engine: input.engine || null,
 };

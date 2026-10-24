@@ -1,15 +1,17 @@
 // The factory as a named pi-subagents workflow resource: `subagent({ workflow: "pi-factory", args })`.
 //
 // pi-subagents calls `resolve` synchronously with core-validated plain-JSON args (≤ 16 KiB, ≤ 16
-// fields per object) and runs the returned script with those same args bound to `args`. resolve may
-// not do I/O, so the extension reads the script once per session and hands it in here.
+// fields per object) and runs only the script it returns: for a named resource the sandbox's `args`
+// is empty, so resolve prepends the validated args as `const FACTORY_ARGS = {...};` and the script
+// reads them from there. resolve may not do I/O, so the extension reads the script once per session
+// and hands it in here.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { engineConfigErrors } from "./config.ts";
 
 export const RESOURCE_NAME = "pi-factory";
-export const RESOURCE_VERSION = 1;
+export const RESOURCE_VERSION = 2; // 2: args are prepended to the script (FACTORY_ARGS)
 
 /** The workflow script shipped with this package. */
 export const SCRIPT_URL = new URL("../workflows/factory.js", import.meta.url);
@@ -124,7 +126,7 @@ export function factoryResource(script: string) {
     resolve(args: Args): { script: string } | { error: string } {
       const errors = argErrors(args);
       if (errors.length) return { error: `pi-factory: ${errors.join("; ")}.` };
-      return { script };
+      return { script: `const FACTORY_ARGS = ${JSON.stringify(args)};\n${script}` };
     },
   };
 }
