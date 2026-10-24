@@ -1,7 +1,7 @@
 // The /factory command's logic: from "/factory 12" in a repo checkout to the workflow's args.
 //
 //   parseCommand  "/factory" arguments → issue number and options
-//   prepare       reads .pi/factory.json, the issue, its branch and the engine commit; plans the launch
+//   prepare       fetches origin; reads .pi/factory.json from origin/main, the issue, its branch and the engine commit; plans the launch
 //   ensureWorktree creates (or reuses) the issue's worktree and branch
 //
 // Side effects go through an injected `exec`, so tests can run without git, gh or a network.
@@ -122,6 +122,8 @@ export interface Plan {
   worktree: string;
   branch: string;
   startAt: StartAt;
+  /** Where the config was read from, for the dry run. */
+  configSource: string;
   args: Record<string, unknown>;
   warnings: string[];
 }
@@ -134,6 +136,7 @@ export function planLaunch(input: {
   options: CommandOptions;
   existingBranch?: string;
   engine?: { commit: string; dirty?: boolean };
+  configSource: string;
   home?: string;
 }): Plan {
   const { file, repoRoot, repo, issue, options } = input;
@@ -160,7 +163,7 @@ export function planLaunch(input: {
   if (errors.length) throw new Error(`the planned args are invalid: ${errors.join("; ")}`);
   const size = Buffer.byteLength(JSON.stringify(args));
   if (size > 16 * 1024) throw new Error(`args are ${size} bytes; pi-subagents allows 16384. Shorten lens texts in .pi/factory.json.`);
-  return { repoRoot, worktree, branch, startAt: options.startAt, args, warnings };
+  return { repoRoot, worktree, branch, startAt: options.startAt, configSource: input.configSource, args, warnings };
 }
 
 async function run(exec: Exec, cmd: string, args: string[], cwd?: string): Promise<string> {
@@ -213,6 +216,56 @@ export async function engineCommit(exec: Exec, packageRoot: string) {
   }
 }
 
+export interface LoadedConfig {
+  /** The parsed JSON, not yet validated. */
+  file: unknown;
+  /** Where it came from, for messages: "origin/main:.pi/factory.json (abc1234)" or "<path> (working tree)". */
+  source: string;
+  warnings: string[];
+}
+
+/**
+ * The repository's .pi/factory.json as origin/main has it, so a run uses the config reviewed on main
+ * rather than whatever the main checkout has checked out. Falls back to the main checkout's working
+ * tree only when origin/main has no such file (a repository's first config PR) or there is no
+ * origin/main. Call it after fetching origin.
+ */
+export async function readFactoryFile(
+  exec: Exec,
+  repoRoot: string,
+  readText: (p: string) => Promise<string>,
+): Promise<LoadedConfig> {
+  const configPath = path.join(repoRoot, ".pi", "factory.json");
+  const local = await readText(configPath).catch((e: Error) => e);
+  const parse = (text: string, source: string) => {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch (e) {
+      throw new Error(`cannot parse ${source}: ${(e as Error).message}`);
+    }
+  };
+  const main = await exec("git", ["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"], { cwd: repoRoot });
+  const commit = main.code === 0 ? main.stdout.trim() : "";
+  const onMain = commit !== "" && (await exec("git", ["cat-file", "-e", `${commit}:.pi/factory.json`], { cwd: repoRoot })).code === 0;
+  if (onMain) {
+    const source = `origin/main:.pi/factory.json (${commit.slice(0, 7)})`;
+    const text = await run(exec, "git", ["cat-file", "blob", `${commit}:.pi/factory.json`], repoRoot);
+    const warnings =
+      typeof local === "string" && local.trim() !== text
+        ? [`${configPath} differs from ${source}; this run uses origin/main's. Merge the change to main to use it.`]
+        : [];
+    return { file: parse(text, source), source, warnings };
+  }
+  const why = commit ? "origin/main has no .pi/factory.json" : "there is no origin/main";
+  if (typeof local !== "string") throw new Error(`no config to read: ${why}, and reading ${configPath} failed (${local.message})`);
+  const source = `${configPath} (working tree)`;
+  return {
+    file: parse(local, source),
+    source,
+    warnings: [`${why}; using ${source}, which has not been reviewed on main. Merge it to main.`],
+  };
+}
+
 export const PACKAGE_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 export async function prepare(exec: Exec, cwd: string, options: CommandOptions, readText = (p: string) => readFile(p, "utf8")): Promise<Plan> {
@@ -223,16 +276,15 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   });
   if (path.basename(commonDir) !== ".git") throw new Error(`${cwd}: bare or unusual repository layout (${commonDir})`);
   const repoRoot = path.dirname(commonDir);
-  const configPath = path.join(repoRoot, ".pi", "factory.json");
-  let file: unknown;
-  try {
-    file = JSON.parse(await readText(configPath));
-  } catch (e) {
-    throw new Error(`cannot read ${configPath}: ${(e as Error).message}`);
-  }
-  const problems = factoryFileErrors(file);
-  if (problems.length) throw new Error(`${configPath} is invalid:\n- ${problems.join("\n- ")}`);
-  const config = file as FactoryFile;
+  // origin/main is only current after a fetch; offline, the local refs still answer.
+  const fetchWarning: string[] = [];
+  await run(exec, "git", ["fetch", "origin"], repoRoot).catch((e: Error) =>
+    fetchWarning.push(`could not fetch origin (${e.message}); the config and the branch lookup used local refs`),
+  );
+  const loaded = await readFactoryFile(exec, repoRoot, readText);
+  const problems = factoryFileErrors(loaded.file);
+  if (problems.length) throw new Error(`${loaded.source} is invalid:\n- ${problems.join("\n- ")}`);
+  const config = loaded.file as FactoryFile;
 
   const repo = config.repo ?? repoFromRemote(await run(exec, "git", ["remote", "get-url", "origin"], repoRoot));
   if (!repo) throw new Error('cannot tell the GitHub repo from the origin remote; set "repo" in .pi/factory.json');
@@ -247,15 +299,12 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   const labelCheck = labelProblems(config, repo, labels.map((l) => l.name));
   if (labelCheck.errors.length) throw new Error(labelCheck.errors.join("\n"));
 
-  // Remote branches are only known after a fetch; offline, the local refs still answer.
-  const fetchWarning: string[] = [];
-  await run(exec, "git", ["fetch", "origin"], repoRoot).catch((e: Error) => fetchWarning.push(`could not fetch origin (${e.message}); branch lookup used local refs`));
   const worktree = worktreeFor(config, repoRoot, issue.number);
   const existingBranch = (await findIssueBranch(exec, repoRoot, worktree, issue.number)) ?? undefined;
 
   const engine = await engineCommit(exec, PACKAGE_ROOT);
-  const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine });
-  plan.warnings.push(...labelCheck.warnings, ...fetchWarning);
+  const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine, configSource: loaded.source });
+  plan.warnings = [...fetchWarning, ...loaded.warnings, ...plan.warnings, ...labelCheck.warnings];
   return plan;
 }
 

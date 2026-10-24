@@ -70,7 +70,9 @@ export default function (pi: ExtensionAPI) {
         for (const w of plan.warnings) ctx.ui.notify(w, "warning");
         if (options.dryRun) {
           ctx.ui.notify(
-            `Dry run: would prepare ${plan.worktree} on ${plan.branch} and launch "${RESOURCE_NAME}" with\n` +
+            `Dry run: would prepare ${plan.worktree} on ${plan.branch} and launch "${RESOURCE_NAME}"\n` +
+              `Config: ${plan.configSource}\n` +
+              `Args:\n` +
               JSON.stringify(plan.args, null, 2),
             "info",
           );
