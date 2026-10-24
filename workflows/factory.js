@@ -1,5 +1,5 @@
 // Factory: spec (Opus) → implement (Sonnet) → [diff (Haiku) → review lenses (Opus, parallel)]
-// → revise ≤ maxRounds (Sonnet) → PR (Sonnet). See docs/factory.md.
+// → revise ≤ maxRounds (Sonnet) → integrate (Haiku; one Sonnet fix round) → PR (Sonnet). See docs/factory.md.
 //
 // args: { repo, issue, slug, worktree, branch, config, lenses?: string[], maxRounds?: number,
 //         seam?: boolean, startAt?: "spec" | "implement" | "review", parent?: number,
@@ -64,9 +64,10 @@ const engineNote = input.engine && input.engine.commit
   : "unknown (launched without /factory)";
 // Single-quoted for the shell, so nothing in the configured identity is expanded.
 const shellQuote = (text) => `'${String(text).replace(/'/g, "'\\''")}'`;
-const commitCmd = config.commitAuthor
-  ? `git -c ${shellQuote(`user.name=${config.commitAuthor.name}`)} -c ${shellQuote(`user.email=${config.commitAuthor.email}`)} commit`
-  : "git commit";
+const gitAs = config.commitAuthor
+  ? `git -c ${shellQuote(`user.name=${config.commitAuthor.name}`)} -c ${shellQuote(`user.email=${config.commitAuthor.email}`)}`
+  : "git";
+const commitCmd = `${gitAs} commit`;
 
 const cwdQ = shellQuote(cwd);
 const CONTEXT = `
@@ -76,7 +77,7 @@ Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never
 Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
 // The validator pins the names but cannot look at the disk: every stage that writes (spec,
-// implement, diff, revise, PR; all on the worker agent, which has bash) checks that the directory really
+// implement, diff, revise, integrate, integrate-fix, PR; all on the worker agent, which has bash) checks that the directory really
 // is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
 // they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
 const COMMON = `${CONTEXT}
@@ -279,7 +280,7 @@ leaves the root cause or the class of bug in place (e.g. checking a result after
 has already happened) is a new "major" finding that names the old id. A "declined" response you
 disagree with stays open at its old severity.`;
 }
-function reviewTask(lens, diff, files, round, prior) {
+function reviewTask(lens, diff, files, round, prior, note) {
   const source = diff.path
     ? `The branch's changes are in ${diff.path}: the output of git diff origin/main...HEAD, a --stat
 summary followed by the full diff (${diff.lines} lines). You cannot run git, so this file is how you
@@ -293,7 +294,7 @@ ${diff.files.length ? `Changed files: ${diff.files.join(", ")}.` : "The diff is 
 You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
 ${source}
 Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and any other file you
-need, including a changed file in full when its hunks are not enough. Do not edit anything.${priorRound(prior)}
+need, including a changed file in full when its hunks are not enough. Do not edit anything.${priorRound(prior)}${note ? `\n${note}` : ""}
 Report findings with severity: blocker (wrong or unsafe; must fix), major (should fix before merge),
 minor, nit. Give each an id of the form "${lens}-r${round}-<n>" (e.g. "${lens}-r${round}-1");
 when a finding repeats one from an earlier round, say so in problem. Set location to "path:line",
@@ -302,7 +303,7 @@ where line is the line's number in the branch's version of the file (in the diff
 "changes" only if there is at least one blocker or major finding. Do not pad: zero findings is a
 valid review.`;
 }
-function reviewBatch(lensList, diff, files, round, prior) {
+function reviewBatch(lensList, diff, files, round, prior, note) {
   return runs.all(lensList.map((lens) => Object.assign({
     key: `review-${lens}-r${round}`,
     label: `Review issue #${issue} ${lens} r${round}`,
@@ -310,7 +311,7 @@ function reviewBatch(lensList, diff, files, round, prior) {
     model: OPUS,
     cwd,
     outputSchema: reviewSchema,
-    task: reviewTask(lens, diff, files, round, prior),
+    task: reviewTask(lens, diff, files, round, prior, note),
   }, withSkill(LENS_SKILLS[lens]))));
 }
 function blocking(results, lensList) {
@@ -397,9 +398,170 @@ Report every finding id in responses and all files you changed.`,
   history.push({ round, lenses: activeLenses, diff: diff.record, blocking: open.length, responses: revOut.responses || [] });
 }
 
-// ---- 5. Follow-up issue, PR -----------------------------------------------------------
+// ---- 5. Integration --------------------------------------------------------------------
+// Parallel runs pass their own checks and still break each other once merged (#5). Merge the latest
+// origin/main into the branch and run every check; on a conflict or a failure, one Sonnet fix round
+// and a re-check. The code lens re-reviews a fix that touched non-test files. Never stops the run: a
+// branch that does not integrate opens as a draft.
+const MERGE_MSG = `Merge origin/main into ${branch} for the integration check`;
+const mergeCmd = `${gitAs} -C ${cwdQ} merge --no-edit -m ${shellQuote(MERGE_MSG)} -m ${shellQuote("Co-Authored-By: Claude <noreply@anthropic.com>")} origin/main`;
+const MERGE_EXCEPTION = `Merging origin/main into ${branch} is this stage's job and the one exception to "never
+merge": never merge anything else, never merge into main, and never push, rebase or reset.`;
+// Every check, pass or fail: unlike implement and revise, "n/a" is not an answer here.
+const fullChecksSchema = {
+  type: "object",
+  required: CHECKS.map((c) => c.name),
+  properties: Object.fromEntries(CHECKS.map((c) => [c.name, { type: "string", enum: ["pass", "fail"] }])),
+};
+// The tail of each failing check's output handed to the fix round.
+const FAILURE_CHARS = 3000;
+
+function integrateRun(key, recheck) {
+  return runs.run(key, {
+    label: `${recheck ? "Re-check integration" : "Integrate main"} for issue #${issue}`,
+    agent: "worker",
+    model: HAIKU,
+    cwd,
+    outputSchema: statusSchema({
+      summary: { type: "string" },
+      main: { type: "string" },
+      merge: { type: "string", enum: ["merged", "up-to-date", "conflict"] },
+      conflicts: { type: "array", items: { type: "string" } },
+      checks: fullChecksSchema,
+      failures: {
+        type: "array",
+        items: {
+          type: "object",
+          required: ["check", "output"],
+          properties: { check: { type: "string" }, output: { type: "string" } },
+        },
+      },
+    }),
+    task: `${COMMON}
+
+You are the INTEGRATION stage${recheck ? ", re-checking after the fix round" : ""}. ${MERGE_EXCEPTION}
+Do not edit, stage or commit anything else, and do not try to fix a failure: report it. Work in the
+foreground. Run these commands from ${cwdQ}, in order, exactly as written:
+  git -C ${cwdQ} fetch origin
+  git -C ${cwdQ} rev-parse --short origin/main
+  ${mergeCmd}
+If the merge stops on conflicts, run
+  git -C ${cwdQ} diff --name-only --diff-filter=U
+  git -C ${cwdQ} merge --abort
+then report merge "conflict" and conflicts (the paths the first of those printed), and do not run
+the checks. Otherwise report merge "up-to-date" if git printed "Already up to date.", else "merged",
+and run every one of these checks from ${cwdQ}, each to the end even when an earlier one fails:
+${checkList}
+Report each check "pass" (it exited 0) or "fail", and for each failing check add an entry to
+failures with the check's name and the last 80 lines of its output. Report main (the commit
+rev-parse printed) and status "done", whether or not the checks pass. If any other command fails
+(the fetch, rev-parse, or a merge that fails without conflicts), stop, report status "blocked" and
+put the command and its error in summary.`,
+  });
+}
+
+const integrationPassed = (out) => out.merge !== "conflict" && CHECKS.every((c) => (out.checks || {})[c.name] === "pass");
+const failingChecks = (out) => CHECKS.filter((c) => (out.checks || {})[c.name] !== "pass").map((c) => c.name);
+const reason = (result) => String((result.structuredOutput || {}).summary || result.error || "no structured output").slice(0, 200);
+
+// The PR's factory record and the run's result: what integration did.
+const integration = { status: "pass", main: null, merge: null, conflicts: [], failing: [], checks: {}, fix: null, reReview: null, note: "" };
+const first = await integrateRun("integrate", false);
+const firstOut = first.structuredOutput || {};
+if (!first.ok || firstOut.status !== "done") {
+  integration.status = "error";
+  integration.note = reason(first);
+} else {
+  integration.main = firstOut.main || null;
+  integration.merge = firstOut.merge || null;
+  integration.conflicts = firstOut.conflicts || [];
+  integration.checks = firstOut.checks || {};
+  if (!integrationPassed(firstOut)) {
+    const conflicted = firstOut.merge === "conflict";
+    integration.failing = conflicted ? [] : failingChecks(firstOut);
+    const failures = (firstOut.failures || []).map((f) => ({ check: String(f.check), output: String(f.output).slice(-FAILURE_CHARS) }));
+    const problem = conflicted
+      ? `The merge conflicts in: ${integration.conflicts.join(", ")}. Nothing is merged yet. Run
+  ${mergeCmd}
+resolve every conflict, then commit the merge with
+  ${commitCmd} --no-edit --cleanup=strip`
+      : `The merge itself is committed, but these checks fail after it: ${integration.failing.join(", ")}. The end of their output:
+${JSON.stringify(failures, null, 2)}`;
+    const fix = await runs.run("integrate-fix", {
+      label: `Fix integration for issue #${issue}`,
+      agent: "worker",
+      model: SONNET,
+      ...withSkill(BUILD_SKILLS),
+      cwd,
+      outputSchema: statusSchema({
+        summary: { type: "string" },
+        changed_files: { type: "array", items: { type: "string" } },
+        non_test_files: { type: "array", items: { type: "string" } },
+        checks: fullChecksSchema,
+      }),
+      task: `${COMMON}
+
+You are the INTEGRATION FIX stage, the only fix round. ${MERGE_EXCEPTION}
+After review, merging origin/main${integration.main ? ` (${integration.main})` : ""} into ${branch} broke it.
+${problem}
+The break comes from combining this branch with changes that reached main after it was cut. Make the
+branch work with main as it is now: keep both sides' intent, never revert or weaken main's changes,
+and never delete or skip a failing test to make it pass. ${specPath} is still the contract; if main
+changed something the spec relies on (a signature, a fixture, a rule), adapt to main and update
+${specPath} in the same commit.
+Project rules: ${config.implement}
+Run every check, not only the failing ones, and fix failures:
+${checkList}
+Commit ("Fix integration with main for #${issue}"). If you cannot make it work, run
+git -C ${cwdQ} merge --abort if a merge is still in progress, leave git status clean, and report
+status "blocked" with the reason in summary.
+Report changed_files: only the files you edited (conflict resolutions and fixes), not the files the
+merge brought in from main unchanged; non_test_files: those of them that are not tests, test
+fixtures or test data (when unsure, list the file); summary: one line on what broke and how you
+fixed it; and each check's result by name.`,
+    });
+    const fixOut = fix.structuredOutput || {};
+    if (!fix.ok || fixOut.status !== "done") {
+      integration.status = "fail";
+      integration.fix = { status: "blocked", summary: reason(fix), changed_files: [], non_test_files: [] };
+    } else {
+      const changed = fixOut.changed_files || [];
+      integration.fix = { status: "done", summary: String(fixOut.summary || "").slice(0, 300), changed_files: changed, non_test_files: fixOut.non_test_files || changed };
+      files = files.length ? Array.from(new Set(files.concat(changed))) : files;
+      const re = await integrateRun("integrate-recheck", true);
+      const reOut = re.structuredOutput || {};
+      if (!re.ok || reOut.status !== "done") {
+        integration.status = "error";
+        integration.note = `re-check: ${reason(re)}`;
+        integration.checks = fixOut.checks || integration.checks;
+      } else {
+        integration.status = integrationPassed(reOut) ? "pass" : "fail";
+        integration.main = reOut.main || integration.main;
+        integration.checks = reOut.checks || {};
+      }
+      if (integration.fix.non_test_files.length) {
+        const r = round + 1;
+        const note = `This round reviews the INTEGRATION FIX. After the review rounds, origin/main${integration.main ? ` (${integration.main})` : ""} was merged
+into the branch and ${conflicted ? `conflicted in ${integration.conflicts.join(", ")}` : `these checks failed: ${integration.failing.join(", ")}`}. The fix round changed
+${changed.join(", ") || "files it did not list"}: ${integration.fix.summary}
+Judge whether the fix is right and keeps both this branch's and main's intent. The rest of the diff
+was reviewed in earlier rounds: raise findings there only where the fix or main's changes affect it.`;
+        diff = diffFor(await diffRun(r), r);
+        const fixReview = await reviewBatch(["code"], diff, files, r, null, note);
+        const fixBlocking = blocking(fixReview, ["code"]);
+        open = open.concat(fixBlocking);
+        followUps = followUps.concat(minors(fixReview, ["code"]));
+        history.push({ round: r, lenses: ["code"], diff: diff.record, blocking: fixBlocking.length, after: "integration fix" });
+        integration.reReview = r;
+      }
+    }
+  }
+}
+if (Object.keys(integration.checks).length) checks = integration.checks;
+
+// ---- 6. Follow-up issue, PR -----------------------------------------------------------
 const checksFailing = Object.keys(checks).some((k) => checks[k] === "fail");
-const draft = open.length > 0 || checksFailing;
+const draft = open.length > 0 || checksFailing || integration.status !== "pass";
 const pr = await runs.run("pr", {
   label: `Open PR for issue #${issue}`,
   agent: "worker",
@@ -429,8 +591,14 @@ You are the PR stage. Do not change code.
 3. Write the PR body (to a file, then --body-file):
    - "Closes #${issue}" and a short summary from ${specPath}.
    - "Factory record": a table with one row per review round (round, lenses, the diff the
-     reviewers read, blocking findings, what was fixed or declined, one line each) from ${JSON.stringify(history)}; then the checks
-     ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
+     reviewers read, blocking findings, what was fixed or declined, one line each; a row with
+     "after": "integration fix" is the code lens re-reviewing the integration fix) from
+     ${JSON.stringify(history)}; then an "Integration" line from ${JSON.stringify(integration)}:
+     the origin/main commit merged (main) and how (merge: merged, up-to-date or conflict, naming
+     the conflicts), each check's result after the merge, what the fix round did (fix; "none" when
+     null) and the re-review round (reReview; "not needed" when null). When status is not "pass",
+     start that line with "Does not integrate with main:" and the reason (note, the conflicts or
+     the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
    - "Follow-ups": one line linking the follow-up issue from step 2 (omit if none).
 4. If a PR for ${branch} already exists (gh pr view ${branch} -R ${repo}), replace its body with
@@ -447,7 +615,7 @@ const prOut = pr.structuredOutput || {};
 if (!pr.ok || !prOut.pr_url) {
   const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
   const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
-  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, error: pr.error || null, engine: input.engine || null };
+  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };
 }
 
 return {
@@ -457,6 +625,7 @@ return {
   draft,
   spec: specOut.spec_path,
   checks,
+  integration,
   rounds: history,
   unresolved: open,
   followUps: followUps.length,

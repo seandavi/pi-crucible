@@ -43,7 +43,7 @@ export const EngineConfig = Type.Object(
         },
         { additionalProperties: false },
       ),
-      { minItems: 1, maxItems: 8, description: "Commands every writing stage runs and reports, by name." },
+      { minItems: 1, maxItems: 8, description: "Commands every writing stage runs and reports, by name; integration runs all of them after merging main." },
     ),
     lenses: Type.Record(Name, Text("What this reviewer checks.", 3000), {
       additionalProperties: false,
@@ -73,8 +73,8 @@ export const EngineConfig = Type.Object(
       Type.Object(
         {
           strong: Type.Optional(Type.String({ minLength: 1, description: "Spec and review (default claude-bridge/claude-opus-5-5)." })),
-          fast: Type.Optional(Type.String({ minLength: 1, description: "Implement, revise, PR (default claude-bridge/claude-sonnet-5-5)." })),
-          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human and writing the review diff (default claude-bridge/claude-haiku-5-5)." })),
+          fast: Type.Optional(Type.String({ minLength: 1, description: "Implement, revise, the integration fix, PR (default claude-bridge/claude-sonnet-5-5)." })),
+          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human, writing the review diff, and the integration merge and checks (default claude-bridge/claude-haiku-5-5)." })),
         },
         { additionalProperties: false },
       ),

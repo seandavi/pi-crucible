@@ -1,4 +1,4 @@
-# The factory: spec → implement → review → revise → PR
+# The factory: spec → implement → review → revise → integrate → PR
 
 An experiment in running issues through a fixed loop of
 [pi-subagents](https://github.com/nicobailon/pi-subagents), with the strong model where judgment
@@ -16,6 +16,7 @@ matters and the fast model where volume does. The script is
 | Diff | Haiku | `worker`, before each review round | `.pi/factory-review/r<round>.diff` in the worktree, ignored by git | `{status, summary, changed_files, diff_lines}` |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
 | Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, responses[], checks}` |
+| Integrate | Haiku; Sonnet for the fix | `worker`, once after review | a merge of `origin/main` into the branch; on a conflict or failing check, one fix round and a re-check | `{status, summary, main, merge, conflicts, checks, failures}`; fix: `{status, summary, changed_files, non_test_files, checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
@@ -56,21 +57,34 @@ findings remain after round two, the PR opens as a **draft** listing them.
 **Follow-ups:** `minor` and `nit` findings are filed as one issue, "Follow-ups from the #n review"
 (a sub-issue of `parent` when given), and the PR links it.
 
+**Integration:** each run's checks pass against the main it started from, and parallel runs can
+still break each other once merged (in bioc-mcp: a changed function signature, twice, and a test
+fixture's record ids). So after review a Haiku worker fetches `origin`, merges `origin/main` into
+the branch (a merge commit, never a rebase) and runs every configured check in full. On a
+conflict or a failing check, one Sonnet fix round gets the conflicting paths or the checks'
+output, fixes the branch without reverting main's changes, and a Haiku re-check merges and runs
+the checks again. If the fix touched files other than tests, fixtures and test data, the `code`
+lens re-reviews in one more round, with its own diff; its blocker/major findings are added to the
+still-open ones (it judges the fix, so it never clears an earlier finding) rather than starting
+another revise round. The checks the PR reports are the post-merge ones, and
+its factory record gets an Integration line. A branch that still conflicts or fails, or whose
+integration could not run, opens as a draft PR saying why; the run does not stop (#5).
+
 **Stops:** a spec with blocking questions stops the run before any code is written; an
 implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
-the run at the end. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
+the run at the end. Integration never stops the run; see above. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
 comment why; the run's result says whether the flag succeeded (`flagged`). Every PR the factory opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
 **Resuming:** `--start-at implement` skips the spec stage (the spec must already be on the branch);
-`--start-at review` re-reviews an existing branch, e.g. after hand edits, and replaces the body of
-its PR if one exists. Use it instead of fixing review findings by hand outside the factory, so the
+`--start-at review` re-reviews an existing branch and integrates it again, e.g. after hand edits
+or when main has moved, and replaces the body of its PR if one exists. Use it instead of fixing review findings by hand outside the factory, so the
 record stays in the PR.
 
 **Provenance:** `/factory` passes the engine's commit (and whether its checkout had local changes),
 and the PR's factory record ends with `Engine: seandavi/pi-factory@<sha>`.
 
-**Never automated:** merging. A human merges, from the main session.
+**Never automated:** merging the PR. A human merges, from the main session. (The integration stage merges main into the branch, never the branch into main.)
 
 ## Configuring a repository
 
@@ -83,12 +97,12 @@ and `.pi/factory.json`. The engine holds no project text; everything below reach
 |---|---|---|
 | `design` | every stage | Where the design lives and how to treat it. |
 | `spec.design` | spec | What the spec's Design section must pin down for this project. |
-| `implement` | implement | Project rules: fixtures, data tests must never read, setup steps. |
-| `checks` | implement, revise, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. |
+| `implement` | implement, integration fix | Project rules: fixtures, data tests must never read, setup steps. |
+| `checks` | implement, revise, integration, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. Integration runs all of them after merging main. |
 | `lenses` | review | `{name: text}`; `code` is required. |
 | `defaultLenses` | `/factory` | Lenses every run gets; must include `code` (default `["code"]`). |
 | `seamNote` | review | What later issues build on, for the `seam` reviewer note. |
-| `skills` | implement, revise, review | `{build, lenses: {name: skill}}`. |
+| `skills` | implement, revise, integration fix, review | `{build, lenses: {name: skill}}`; `build` goes to implement, revise and the integration fix. |
 | `specDir` | spec | Default `docs/specs`. |
 | `worktreeRoot` | `/factory` | Default `../<repo>-worktrees`, relative to the main checkout. |
 | `parent` | PR | Tracking issue; the follow-up issue becomes its sub-issue. |
@@ -143,9 +157,9 @@ Checks: `npm test` (args validation and a registration round trip through pi-sub
 From pi, anywhere inside the repository (its main checkout or any worktree):
 
 ```text
-/factory 12                       # spec → implement → review → revise → PR
+/factory 12                       # spec → implement → review → revise → integrate → PR
 /factory 12 --dry-run             # show the worktree, branch and args; change nothing
-/factory 12 --start-at review     # re-review the existing branch, update its PR
+/factory 12 --start-at review     # re-review and re-integrate the existing branch, update its PR
 /factory 12 --lens security       # add a lens the issue's labels do not ask for
 ```
 
@@ -167,7 +181,7 @@ Launching by hand still works, for scripts or other agents: pass the same args `
 prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
 `issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
 metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,
-diff, revise, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
+diff, revise, integrate, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
 branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
 read-only and have no shell, so they skip the check and read the diff the diff stage wrote.
 
@@ -181,6 +195,9 @@ subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, iss
 - Does round two ever happen, and does it converge?
 - Do findings cite the diff (`path:line` locations in changed hunks)? How often is a round's
   diff unavailable?
+- Integration: how often main had moved, how often the merge conflicted or a check failed after
+  it, whether the fix round converged, and whether the code re-review found anything. Did a merge
+  break still reach a human?
 - Time and tokens per stage, from the run receipts.
 - Severity calibration: how many `minor` findings had to be fixed before merge anyway? (#2: five,
   all in the upstream seam; the `seam` note and v2's fix-judging are the response.)
