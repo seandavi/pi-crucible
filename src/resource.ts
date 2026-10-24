@@ -5,6 +5,7 @@
 // not do I/O, so the extension reads the script once per session and hands it in here.
 
 import { readFileSync } from "node:fs";
+import { engineConfigErrors } from "./config.ts";
 
 export const RESOURCE_NAME = "pi-factory";
 export const RESOURCE_VERSION = 1;
@@ -57,6 +58,25 @@ const FIELDS: Record<string, { required: boolean; check: Check }> = {
     check: (v) => (typeof v === "string" && STAGES.includes(v) ? null : `must be one of ${STAGES.join(", ")}`),
   },
   parent: { required: false, check: (v) => (isPositiveInt(v) ? null : "must be a positive integer") },
+  config: {
+    required: true,
+    check: (v) => {
+      const errors = engineConfigErrors(v);
+      return errors.length ? `is not a valid engine config (${errors.join("; ")})` : null;
+    },
+  },
+  engine: {
+    required: false,
+    check: (v) => {
+      const e = v as { commit?: unknown; dirty?: unknown };
+      const ok =
+        typeof v === "object" && v !== null && !Array.isArray(v) &&
+        Object.keys(v).every((k) => k === "commit" || k === "dirty") &&
+        typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit) &&
+        (e.dirty === undefined || typeof e.dirty === "boolean");
+      return ok ? null : "must be { commit: <git sha>, dirty?: boolean }";
+    },
+  },
 };
 
 /** Every problem with `args`, as messages an agent can act on; empty when the args are valid. */
@@ -72,6 +92,12 @@ export function argErrors(args: Args): string[] {
     }
     const problem = check(args[key]);
     if (problem) errors.push(`arg "${key}" ${problem}`);
+  }
+  if (!errors.length) {
+    const defined = (args.config as { lenses: Record<string, string> }).lenses;
+    const lenses = (args.lenses as string[] | undefined) ?? ["code"];
+    const missing = lenses.filter((l) => !defined[l]);
+    if (missing.length) errors.push(`no lens text in config.lenses for: ${missing.join(", ")}`);
   }
   return errors;
 }

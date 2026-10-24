@@ -1,0 +1,107 @@
+// Runs workflows/factory.js the way the pi-subagents sandbox does (the file is the body of an async
+// function of `args` and `runs`), with a fake `runs` that records every child task and answers from
+// a script of structured outputs.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { loadScript } from "../src/resource.ts";
+import { engineConfig, validArgs } from "./fixtures.ts";
+
+type Opts = { agent: string; model: string; task: string; skill?: string; outputSchema?: { required?: string[] } };
+type Answer = { ok?: boolean; structuredOutput?: unknown; error?: string };
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+
+export async function simulate(args: Record<string, unknown>, answer: (key: string, opts: Opts) => Answer) {
+  const calls: (Opts & { key: string })[] = [];
+  const run = async (key: string, opts: Opts) => {
+    calls.push({ key, ...opts });
+    const a = answer(key, opts);
+    return { ok: a.ok ?? true, structuredOutput: a.structuredOutput, error: a.error };
+  };
+  const runs = { run, all: (list: (Opts & { key: string })[]) => Promise.all(list.map((o) => run(o.key, o))) };
+  const result = await new AsyncFunction("args", "runs", loadScript())(args, runs);
+  return { result, calls, task: (key: string) => calls.find((c) => c.key === key)?.task ?? "" };
+}
+
+const happy = (overrides: Record<string, Answer> = {}) => (key: string): Answer => {
+  if (overrides[key]) return overrides[key];
+  if (key === "spec") return { structuredOutput: { status: "ready", spec_path: "docs/specs/2-scaffold.md", blocking_questions: [] } };
+  if (key === "implement") return { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: { test: "pass" } } };
+  if (key.startsWith("review-")) return { structuredOutput: { verdict: "approve", findings: [] } };
+  if (key === "pr") return { structuredOutput: { pr_url: "https://github.com/o/r/pull/9", draft: false, followup_issue: null } };
+  return { structuredOutput: {} };
+};
+
+const args = { ...validArgs, repo: "owner/repo", worktree: "/tmp/repo-worktrees/issue-2", startAt: undefined, lenses: ["code", "ux"] };
+
+test("every stage's prompt comes from the config, not the engine", async () => {
+  const { result, calls, task } = await simulate(args, happy());
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "pr"]);
+  for (const c of calls) assert.match(c.task, /The design record is README\.md\./, c.key);
+  assert.match(task("spec"), /Design \(files and interfaces\)/);
+  assert.match(task("implement"), /Tests never use the network\.\n/);
+  assert.match(task("implement"), /- test: npm test/);
+  assert.match(task("review-code-r0"), /Lens: CODE review\./);
+  assert.match(task("review-ux-r0"), /Lens: UX review\./);
+  assert.match(task("pr"), /Engine: seandavi\/pi-factory@4d310bf \(with uncommitted changes\)/);
+  assert.match(task("spec"), /Commit with: git commit\n/, "no commitAuthor: the worktree's identity");
+  const all = calls.map((c) => c.task).join("\n");
+  assert.doesNotMatch(all, /bioc|zod|MCP tool|workers-best-practices|seandavi@/i);
+  assert.equal(calls.find((c) => c.key === "implement")?.skill, undefined);
+  assert.deepEqual(calls.find((c) => c.key === "implement")?.outputSchema && (calls.find((c) => c.key === "implement")!.outputSchema as { properties: { checks: { required: string[] } } }).properties.checks.required, ["test"]);
+  assert.equal(result.pr, "https://github.com/o/r/pull/9");
+  assert.equal(result.draft, false);
+  assert.deepEqual(result.engine, { commit: "4d310bf", dirty: true });
+});
+
+test("models, skills, commit identity and spec dir follow the config", async () => {
+  const config = {
+    ...engineConfig,
+    specDir: "design/specs",
+    models: { strong: "p/strong", fast: "p/fast" },
+    skills: { build: "build-skill", lenses: { code: "code-skill" } },
+    commitAuthor: { name: "A B", email: "a@b.c" },
+  };
+  const { calls, task } = await simulate({ ...args, config }, happy());
+  const by = (k: string) => calls.find((c) => c.key === k)!;
+  assert.equal(by("spec").model, "p/strong");
+  assert.equal(by("implement").model, "p/fast");
+  assert.equal(by("pr").model, "p/fast");
+  assert.equal(by("implement").skill, "build-skill");
+  assert.equal(by("review-code-r0").skill, "code-skill");
+  assert.equal(by("review-ux-r0").skill, undefined);
+  assert.match(task("spec"), /Write design\/specs\/2-scaffold\.md/);
+  assert.match(task("spec"), /git -c user\.name="A B" -c user\.email=a@b\.c commit/);
+});
+
+test("a failing configured check makes the PR a draft", async () => {
+  const { result } = await simulate(args, happy({
+    implement: { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: { test: "fail" } } },
+  }));
+  assert.equal(result.draft, true);
+});
+
+test("blocker findings trigger revise and a re-review by that lens only", async () => {
+  let round = 0;
+  const { calls, task } = await simulate(args, (key, opts) => {
+    if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts", problem: "p", fix: "f" }] } };
+    if (key === "revise-r1") { round++; return { structuredOutput: { status: "done", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }; }
+    return happy()(key);
+  });
+  assert.equal(round, 1);
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "revise-r1", "review-code-r1", "pr"]);
+  assert.match(task("revise-r1"), /- test: npm test/);
+});
+
+test("a spec with blocking questions stops and flags a human", async () => {
+  const { result, calls } = await simulate(args, happy({
+    spec: { structuredOutput: { status: "blocked", spec_path: "x", blocking_questions: ["Which DB?"] } },
+  }));
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "flag-spec"]);
+  assert.match(calls[1].task, /Which DB\?/);
+  assert.equal(result.stopped, true);
+});
+
+test("the script refuses to run without config or with a lens it has no text for", async () => {
+  await assert.rejects(simulate({ ...args, config: undefined }, happy()), /args\.config is required/);
+  await assert.rejects(simulate({ ...args, lenses: ["security"] }, happy()), /no lens text in config for: security/);
+});

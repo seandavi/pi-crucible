@@ -21,11 +21,14 @@
     "extensions",
     "src",
     "workflows",
-    "docs"
+    "docs",
+    "schema",
+    "examples"
   ],
   "scripts": {
     "test": "node --test test/*.test.ts",
-    "check": "node scripts/check-workflow.mjs"
+    "check": "node scripts/check-workflow.mjs",
+    "schema": "node scripts/write-schema.ts"
   },
   "dependencies": {
     "pi-subagents": "^0.80.0"
@@ -40,5 +43,8 @@
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "devDependencies": {
+    "typebox": "^1.4.3"
   }
 }

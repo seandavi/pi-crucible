@@ -3,19 +3,9 @@ import assert from "node:assert/strict";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
 import extension from "../extensions/factory.ts";
 import { argErrors, factoryResource, loadScript, RESOURCE_NAME } from "../src/resource.ts";
+import { engineConfig, fakePi, validArgs } from "./fixtures.ts";
 
-const valid = {
-  repo: "seandavi/bioc-mcp",
-  issue: 2,
-  slug: "scaffold",
-  worktree: "/tmp/bioc-mcp-worktrees/issue-2",
-  branch: "issue-2-scaffold",
-  lenses: ["code", "ux"],
-  maxRounds: 2,
-  seam: true,
-  startAt: "review",
-  parent: 1,
-};
+const valid = validArgs;
 
 test("valid args resolve to the shipped script", () => {
   const script = loadScript();
@@ -24,8 +14,8 @@ test("valid args resolve to the shipped script", () => {
 });
 
 test("only the required args are needed", () => {
-  const { repo, issue, slug, worktree, branch } = valid;
-  assert.deepEqual(argErrors({ repo, issue, slug, worktree, branch }), []);
+  const { repo, issue, slug, worktree, branch, config } = valid;
+  assert.deepEqual(argErrors({ repo, issue, slug, worktree, branch, config }), []);
 });
 
 test("missing, unknown and malformed args are all reported", () => {
@@ -37,21 +27,29 @@ test("missing, unknown and malformed args are all reported", () => {
     'arg "startAt" must be one of spec, implement, review',
     'arg "worktree" must be an absolute path',
     'missing required arg "slug"',
-    'unknown arg "typo" (known: repo, issue, slug, worktree, branch, lenses, maxRounds, seam, startAt, parent)',
+    'unknown arg "typo" (known: repo, issue, slug, worktree, branch, lenses, maxRounds, seam, startAt, parent, config, engine)',
   ]);
   const resolved = factoryResource("x").resolve({});
+  assert.ok("error" in resolved && resolved.error.includes('missing required arg "config"'));
   assert.ok("error" in resolved && resolved.error.startsWith("pi-factory: missing required arg"));
 });
 
 // The extension registers through its own copy of pi-subagents; the host resolves through the copy
 // pi loaded. They share one registry on globalThis, so resolve through pi-subagents' internal
 // resolver here, as the subagent tool does.
+test("config and engine are validated, and lenses must have config text", () => {
+  assert.match(argErrors({ ...valid, config: { ...engineConfig, lenses: { ux: "x" } } }).join(), /must define the "code" lens/);
+  assert.match(argErrors({ ...valid, config: { ...engineConfig, extra: 1 } }).join(), /unknown field\(s\) extra/);
+  assert.match(argErrors({ ...valid, engine: { commit: "main" } }).join(), /arg "engine" must be/);
+  assert.deepEqual(argErrors({ ...valid, lenses: ["code", "security"] }), ["no lens text in config.lenses for: security"]);
+});
+
 test("extension registers per session and disposes on shutdown", async () => {
   const { resolveWorkflowResource } = await import(
     new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
   );
-  const handlers: Record<string, (event: unknown, ctx: unknown) => void> = {};
-  extension({ on: (name: string, fn: (e: unknown, c: unknown) => void) => (handlers[name] = fn) } as never);
+  const { pi, handlers } = fakePi();
+  extension(pi as never);
   const ctx = { sessionManager: { getSessionId: () => "test-session" } };
 
   handlers.session_start({}, ctx);
