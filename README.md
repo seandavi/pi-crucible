@@ -94,11 +94,11 @@ The [tracking issue](https://github.com/seandavi/pi-factory/issues/1) lays out t
 - [x] Reviewers always get the diff ([#4](https://github.com/seandavi/pi-factory/issues/4))
 - [x] Integration step before the PR: merge main and run the full checks
       ([#5](https://github.com/seandavi/pi-factory/issues/5))
-- [ ] Migrate bioc-mcp and bioc-support-archive to the shared engine
+- [x] Migrate bioc-mcp and bioc-support-archive to the shared engine
       ([#6](https://github.com/seandavi/pi-factory/issues/6),
       [#7](https://github.com/seandavi/pi-factory/issues/7))
 
-Until #6 and #7 land, those two repositories keep their own copies.
+bioc-mcp, bioc-support-archive and monode now run on this engine, each configured by its own `.pi/factory.json`.
 
 ### Lessons carried over from bioc-mcp
 
