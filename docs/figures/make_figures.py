@@ -106,7 +106,7 @@ def factory_flow(theme: dict[str, str]) -> str:
     top, h = 110, 175
     mid = top + h / 2
 
-    f.box(30, top, 240, h, "/factory <issue>", [".pi/factory.json", "worktree + branch", "lenses from labels",
+    f.box(30, top, 240, h, "/factory <issue>", [".pi/factory.json @ main", "worktree + branch", "lenses from labels",
                                                 "args checked first"], "MUTED")
     f.box(330, top, 240, h, "Spec · Opus", ["docs/specs/", "  <n>-<slug>.md", "one commit"], "VIOLET")
     f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "configured checks"],

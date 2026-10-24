@@ -82,14 +82,17 @@ or when main has moved, and replaces the body of its PR if one exists. Use it in
 record stays in the PR.
 
 **Provenance:** `/factory` passes the engine's commit (and whether its checkout had local changes),
-and the PR's factory record ends with `Engine: seandavi/pi-factory@<sha>`.
+and the PR's factory record ends with `Engine: seandavi/pi-factory@<sha>`. The config is read from
+`origin/main`, so the run's config is the one at that commit (`--dry-run` shows it), unless
+`/factory` warned that it fell back to the working tree.
 
 **Never automated:** merging the PR. A human merges, from the main session. (The integration stage merges main into the branch, never the branch into main.)
 
 ## Configuring a repository
 
 Each repository that uses the engine keeps two things: `AGENTS.md`, which every stage reads first,
-and `.pi/factory.json`. The engine holds no project text; everything below reaches the workflow as
+and `.pi/factory.json`. Merge the config to `main`: `/factory` reads it from `origin/main` (see
+[Running it](#running-it)). The engine holds no project text; everything below reaches the workflow as
 `args.config`. The schema is [`schema/factory.schema.json`](../schema/factory.schema.json)
 (generated from [`src/config.ts`](../src/config.ts)); point `$schema` at it for editor help.
 
@@ -163,7 +166,12 @@ From pi, anywhere inside the repository (its main checkout or any worktree):
 /factory 12 --lens security       # add a lens the issue's labels do not ask for
 ```
 
-`/factory` reads `.pi/factory.json` from the main checkout and validates it; reads the issue (it
+`/factory` fetches `origin` and reads `.pi/factory.json` as `origin/main` has it, so the config
+that drives a run is the one reviewed on main, whatever branch the main checkout is on or has
+uncommitted. Only when `origin/main` has no config yet (while a repository's first config PR is
+open) does it read the main checkout's working tree instead, with a warning. It also warns when
+the working tree's copy differs from main's, and `--dry-run` says which copy it used. It
+validates the config; reads the issue (it
 must be open) for its title and labels; picks lenses from `defaultLenses`, `review:<lens>` labels
 and `--lens`, and `seam` from the label. It then creates the worktree
 `<worktreeRoot>/issue-<n>` on branch `issue-<n>-<slug>` from `origin/main` (or reuses it, or checks

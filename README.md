@@ -55,6 +55,8 @@ review lenses, the checks to run and any project rules for the stages. Start fro
 [bioc-mcp](examples/bioc-mcp.factory.json) (TypeScript Worker, `code`/`ux`/`security` lenses) or
 [bioc-support-archive](examples/bioc-support-archive.factory.json) (Python pipeline and a Worker,
 `code`/`ux`/`privacy`). The fields are in [docs/factory.md](docs/factory.md#configuring-a-repository).
+Merge both to `main`: `/factory` reads `.pi/factory.json` from `origin/main`, and uses the working
+tree's copy (with a warning) only until main has one.
 
 Create the labels the factory uses. `needs:human` is required (every stop and every PR carries it;
 `/factory` refuses to start without it); `seam` and one `review:<lens>` per lens other than `code` let
