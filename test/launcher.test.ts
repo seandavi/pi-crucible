@@ -65,7 +65,7 @@ const issue = { number: 4, title: "Reviewers always get the diff", state: "OPEN"
 const options = { issue: 4, startAt: "spec" as const, lenses: [], dryRun: false };
 
 test("planLaunch builds args the resource accepts", () => {
-  const plan = planLaunch({ file: factoryFile, repoRoot: "/src/pi-factory", repo: "seandavi/pi-factory", issue, options, engine: { commit: "abc1234" } });
+  const plan = planLaunch({ file: factoryFile, repoRoot: "/src/pi-factory", repo: "seandavi/pi-factory", issue, options, engine: { commit: "abc1234" }, configSource: "test" });
   assert.equal(plan.branch, "issue-4-reviewers-always-get-the-diff");
   assert.equal(plan.worktree, "/src/pi-factory-worktrees/issue-4");
   assert.deepEqual(argErrors(plan.args), []);
@@ -75,7 +75,7 @@ test("planLaunch builds args the resource accepts", () => {
   assert.equal(plan.args.startAt, undefined, "spec is the default and is left out");
   assert.deepEqual(Object.keys(plan.args.config as object).sort(), ["checks", "design", "implement", "lenses", "spec"]);
   const big = { ...factoryFile, lenses: { code: "x".repeat(3000), a: "x".repeat(3000), b: "x".repeat(3000), c: "x".repeat(3000), d: "x".repeat(3000), e: "x".repeat(3000) } };
-  assert.throws(() => planLaunch({ file: big, repoRoot: "/r", repo: "a/b", issue, options }), /args are \d+ bytes; pi-subagents allows 16384/);
+  assert.throws(() => planLaunch({ file: big, repoRoot: "/r", repo: "a/b", issue, options, configSource: "test" }), /args are \d+ bytes; pi-subagents allows 16384/);
 });
 
 /** A scripted exec: the first matching rule answers; unmatched commands fail loudly. */
@@ -91,6 +91,8 @@ function scripted(rules: [RegExp, { stdout?: string; code?: number; stderr?: str
   return { exec, calls, lines: () => calls.map((c) => `${c.cmd} ${c.args.join(" ")}`) };
 }
 
+const MAIN_SHA = "fedcba9876543210fedcba9876543210fedcba98";
+
 const repoRules = (state = "OPEN", extra: [RegExp, { stdout?: string; code?: number }][] = []): [RegExp, { stdout?: string; code?: number }][] => [
   ...extra,
   [/^git rev-parse --path-format=absolute --git-common-dir$/, { stdout: "/src/pi-factory/.git\n" }],
@@ -98,6 +100,9 @@ const repoRules = (state = "OPEN", extra: [RegExp, { stdout?: string; code?: num
   [/^gh issue view 4 -R seandavi\/pi-factory/, { stdout: JSON.stringify({ number: 4, title: issue.title, state, labels: [{ name: "seam" }] }) }],
   [/^gh label list -R seandavi\/pi-factory/, { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) }],
   [/^git fetch origin$/, {}],
+  [/^git rev-parse --verify --quiet refs\/remotes\/origin\/main$/, { stdout: MAIN_SHA + "\n" }],
+  [/^git cat-file -e fedcba9.*:\.pi\/factory\.json$/, {}],
+  [/^git cat-file blob fedcba9.*:\.pi\/factory\.json$/, { stdout: JSON.stringify(factoryFile) }],
   [/^git -C .* rev-parse --abbrev-ref HEAD$/, { code: 128 }],
   [/^git for-each-ref /, { stdout: "" }],
   [/^git -C .* rev-parse HEAD$/, { stdout: "0123456789abcdef0123456789abcdef01234567\n" }],
@@ -115,15 +120,65 @@ test("prepare reads config, issue and engine commit from the main checkout", asy
   assert.equal(plan.worktree, "/src/pi-factory-worktrees/issue-4", "not nested in the worktree /factory ran from");
   assert.deepEqual(plan.args.engine, { commit: "0123456789abcdef0123456789abcdef01234567" });
   assert.equal(plan.args.repo, "seandavi/pi-factory");
+  assert.equal(plan.configSource, "origin/main:.pi/factory.json (fedcba9)");
 });
 
 test("prepare refuses invalid config and closed issues with actionable errors", async () => {
-  const bad = async () => JSON.stringify({ ...factoryFile, lenses: { ux: "u" }, typo: true });
-  await assert.rejects(prepare(scripted(repoRules()).exec, "/x", options, bad), /factory\.json is invalid:\n- \(root\): unknown field\(s\) typo/);
-  const missing = async () => { throw new Error("ENOENT"); };
-  await assert.rejects(prepare(scripted(repoRules()).exec, "/x", options, missing), /cannot read \/src\/pi-factory\/\.pi\/factory\.json: ENOENT/);
   const good = async () => JSON.stringify(factoryFile);
+  const bad: [RegExp, { stdout?: string }] = [/^git cat-file blob /, { stdout: JSON.stringify({ ...factoryFile, lenses: { ux: "u" }, typo: true }) }];
+  await assert.rejects(
+    prepare(scripted(repoRules("OPEN", [bad])).exec, "/x", options, good),
+    /origin\/main:\.pi\/factory\.json \(fedcba9\) is invalid:\n- \(root\): unknown field\(s\) typo/,
+  );
+  const missing = async () => { throw new Error("ENOENT"); };
+  await assert.rejects(
+    prepare(scripted(repoRules("OPEN", [[/^git cat-file -e /, { code: 128 }]])).exec, "/x", options, missing),
+    /no config to read: origin\/main has no \.pi\/factory\.json, and reading \/src\/pi-factory\/\.pi\/factory\.json failed \(ENOENT\)/,
+  );
   await assert.rejects(prepare(scripted(repoRules("CLOSED")).exec, "/x", options, good), /seandavi\/pi-factory#4 is closed/);
+});
+
+test("the config comes from origin/main, not the main checkout's working tree", async () => {
+  const differs = `/src/pi-factory/.pi/factory.json differs from origin/main:.pi/factory.json (fedcba9); this run uses origin/main's. Merge the change to main to use it.`;
+  const s = scripted(repoRules());
+  const plan = await prepare(s.exec, "/x", options, async () => JSON.stringify({ ...factoryFile, parent: 99 }));
+  assert.equal(plan.args.parent, 1, "main's copy, not the working tree's");
+  assert.equal(plan.configSource, "origin/main:.pi/factory.json (fedcba9)");
+  assert.ok(plan.warnings.includes(differs), plan.warnings.join());
+  const lines = s.lines();
+  assert.equal(lines.filter((l) => l === "git fetch origin").length, 1);
+  assert.ok(lines.indexOf("git fetch origin") < lines.indexOf("git rev-parse --verify --quiet refs/remotes/origin/main"));
+
+  const same = await prepare(scripted(repoRules()).exec, "/x", options, async () => JSON.stringify(factoryFile));
+  assert.ok(!same.warnings.some((w) => w.includes("differs")), same.warnings.join());
+  const absent = await prepare(scripted(repoRules()).exec, "/x", options, async () => { throw new Error("ENOENT"); });
+  assert.equal(absent.args.parent, 1);
+  assert.deepEqual(absent.warnings.filter((w) => w.includes("factory.json")), [], "a missing working-tree copy is not worth a warning");
+});
+
+test("the working tree is the fallback, with a warning, until origin/main has a config", async () => {
+  const read = async () => JSON.stringify(factoryFile);
+  const noFile: [RegExp, { code: number }] = [/^git cat-file -e /, { code: 128 }];
+  let s = scripted(repoRules("OPEN", [noFile]));
+  let plan = await prepare(s.exec, "/x", options, read);
+  assert.equal(plan.configSource, "/src/pi-factory/.pi/factory.json (working tree)");
+  assert.ok(
+    plan.warnings.includes(
+      "origin/main has no .pi/factory.json; using /src/pi-factory/.pi/factory.json (working tree), which has not been reviewed on main. Merge it to main.",
+    ),
+    plan.warnings.join(),
+  );
+  assert.ok(!s.lines().some((l) => l.startsWith("git cat-file blob")));
+
+  s = scripted(repoRules("OPEN", [[/^git rev-parse --verify --quiet refs\/remotes\/origin\/main$/, { code: 1 }]]));
+  plan = await prepare(s.exec, "/x", options, read);
+  assert.ok(plan.warnings.some((w) => w.startsWith("there is no origin/main; using")), plan.warnings.join());
+  assert.ok(!s.lines().some((l) => l.startsWith("git cat-file")));
+
+  await assert.rejects(
+    prepare(scripted(repoRules("OPEN", [noFile])).exec, "/x", options, async () => "{"),
+    /cannot parse \/src\/pi-factory\/\.pi\/factory\.json \(working tree\): /,
+  );
 });
 
 test("an issue that already has a branch keeps it, whatever its title says now", async () => {
@@ -166,11 +221,11 @@ test("prepare insists on needs:human and suggests the other labels", async () =>
 
 test("a failed fetch is a warning, not a stop", async () => {
   const plan = await prepare(scripted(repoRules("OPEN", [[/^git fetch origin$/, { code: 1, stderr: "offline" }]])).exec, "/x", options, async () => JSON.stringify(factoryFile));
-  assert.match(plan.warnings.join(), /could not fetch origin .*offline.*local refs/);
+  assert.match(plan.warnings[0], /could not fetch origin .*offline.*the config and the branch lookup used local refs/);
 });
 
 const plan = (startAt: Plan["startAt"] = "spec"): Plan => ({
-  repoRoot: "/src/r", worktree: "/src/r-worktrees/issue-4", branch: "issue-4-x", startAt, args: {}, warnings: [],
+  repoRoot: "/src/r", worktree: "/src/r-worktrees/issue-4", branch: "issue-4-x", startAt, configSource: "test", args: {}, warnings: [],
 });
 
 test("ensureWorktree creates a branch from origin/main, or reuses what exists", async () => {
@@ -199,6 +254,9 @@ test("/factory prepares the worktree and launches the named resource over RPC", 
     if (line.startsWith("gh issue view")) return { stdout: JSON.stringify({ number: 4, title: "Diff for reviewers", state: "OPEN", labels: [] }) };
     if (line.startsWith("gh label list")) return { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) };
     if (line.includes("rev-parse HEAD")) return { stdout: "abcdef1" };
+    if (line.includes("refs/remotes/origin/main")) return { stdout: "0123456789abcdef0123456789abcdef01234567" };
+    if (line.startsWith("git cat-file -e")) return {};
+    if (line.startsWith("git cat-file blob")) return { stdout: JSON.stringify(factoryFile) };
     if (line.includes("--verify --quiet")) return { code: 1 };
     return {};
   });
@@ -227,6 +285,7 @@ test("/factory prepares the worktree and launches the named resource over RPC", 
   notes.length = 0;
   await commands.factory.handler("4 --dry-run", ctx);
   assert.match(notes[0][1], /^Dry run: would prepare .*issue-4 on issue-4-diff-for-reviewers/);
+  assert.match(notes[0][1], /\nConfig: origin\/main:\.pi\/factory\.json \(0123456\)\n/);
   assert.equal(emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length, 1, "dry run launches nothing");
 
   notes.length = 0;
