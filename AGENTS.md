@@ -5,7 +5,9 @@ This repo is the factory engine itself. Read [docs/factory.md](docs/factory.md) 
 - The workflow script runs in the pi-subagents sandbox: no filesystem, no shell, no nested async
   functions. Validate every change with `subagent({ action: "validate", workflow: "<path>" })`
   and run `npm test` and `npm run check` (the latter parses the script as an async function body).
-- When the script's args change, update the validator in `src/resource.ts` in the same commit.
+- When the script's args change, update the validator in `src/resource.ts` in the same commit;
+  when config fields change, `src/config.ts` and `npm run schema` (the tests check the schema file).
+- This repo runs its own issues through the factory: `.pi/factory.json` is its config.
 - When stages, models, lenses or stop rules change, update `docs/factory.md` and regenerate the
   README figure: `python3 docs/figures/make_figures.py`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - Claude-bridge children must be launched `async: true` on the Mac.

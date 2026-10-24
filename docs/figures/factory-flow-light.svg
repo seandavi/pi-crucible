@@ -2,11 +2,11 @@
 <title>The factory workflow: launch, spec (Opus), implement (Sonnet), parallel review lenses (Opus) with up to two revise rounds (Sonnet), then a PR (Sonnet) that a human merges. Spec or implement can stop and flag a human.</title>
 <defs><marker id="ah-MUTED" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#59636e"/></marker><marker id="ah-VIOLET" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8250df"/></marker><marker id="ah-BLUE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0969da"/></marker><marker id="ah-GREEN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a7f37"/></marker><marker id="ah-AMBER" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9a6700"/></marker><marker id="ah-CORAL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#cf222e"/></marker></defs>
 <rect x="30" y="110" width="240" height="175" rx="12" fill="#59636e1f" stroke="#59636e" stroke-width="2"/>
-<text x="48" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">Launch</text>
-<text x="48" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">subagent({ workflow:</text>
-<text x="48" y="200" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">  &quot;pi-factory&quot; })</text>
-<text x="48" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">args checked first</text>
-<text x="48" y="246" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">worktree on branch</text>
+<text x="48" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">/factory &lt;issue&gt;</text>
+<text x="48" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">.pi/factory.json</text>
+<text x="48" y="200" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">worktree + branch</text>
+<text x="48" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">lenses from labels</text>
+<text x="48" y="246" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">args checked first</text>
 <rect x="330" y="110" width="240" height="175" rx="12" fill="#8250df1f" stroke="#8250df" stroke-width="2"/>
 <text x="348" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">Spec · Opus</text>
 <text x="348" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">docs/specs/</text>
@@ -16,7 +16,7 @@
 <text x="648" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">Implement · Sonnet</text>
 <text x="648" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">code + tests</text>
 <text x="648" y="200" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">small commits</text>
-<text x="648" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">tests, typecheck</text>
+<text x="648" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">configured checks</text>
 <rect x="930" y="80" width="280" height="235" rx="16" fill="none" stroke="#8250df" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.8"/>
 <text x="946" y="70" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#8250df" font-weight="700" text-anchor="start" xml:space="preserve">REVIEW · PARALLEL</text>
 <rect x="950" y="100" width="240" height="58" rx="10" fill="#8250df1f" stroke="#8250df" stroke-width="2"/>
@@ -26,8 +26,8 @@
 <text x="966" y="207.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">ux</text>
 <text x="1176" y="206.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#59636e" font-weight="400" text-anchor="end" xml:space="preserve">review:ux</text>
 <rect x="950" y="244" width="240" height="58" rx="10" fill="#8250df1f" stroke="#8250df" stroke-width="2"/>
-<text x="966" y="279.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">security</text>
-<text x="1176" y="278.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#59636e" font-weight="400" text-anchor="end" xml:space="preserve">review:security</text>
+<text x="966" y="279.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">&lt;lens&gt;</text>
+<text x="1176" y="278.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#59636e" font-weight="400" text-anchor="end" xml:space="preserve">review:&lt;lens&gt;</text>
 <rect x="1280" y="110" width="240" height="175" rx="12" fill="#0969da1f" stroke="#0969da" stroke-width="2"/>
 <text x="1298" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">PR · Sonnet</text>
 <text x="1298" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">push the branch</text>
@@ -74,10 +74,10 @@
 <rect x="711.62" y="343.5" width="76.75999999999999" height="27" rx="6" fill="#ffffff" opacity="0.92"/>
 <text x="750" y="362.5" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#cf222e" font-weight="500" text-anchor="middle" xml:space="preserve">blocked</text>
 <rect x="653.2" y="18" width="193.6" height="26" rx="13.0" fill="#1a7f3733" stroke="#1a7f37"/>
-<text x="750.0" y="35" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">startAt: &quot;implement&quot;</text>
+<text x="750.0" y="35" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">--start-at implement</text>
 <path d="M750,46 L750,106" fill="none" stroke="#1a7f37" stroke-width="2" marker-end="url(#ah-GREEN)"/>
 <rect x="1066.22" y="18" width="167.56" height="26" rx="13.0" fill="#1a7f3733" stroke="#1a7f37"/>
-<text x="1150.0" y="35" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">startAt: &quot;review&quot;</text>
+<text x="1150.0" y="35" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">--start-at review</text>
 <path d="M1150,46 L1150,76" fill="none" stroke="#1a7f37" stroke-width="2" marker-end="url(#ah-GREEN)"/>
 <line x1="30" y1="600" x2="1790" y2="600" stroke="#d1d9e0"/>
 <text x="30" y="636" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#59636e" font-weight="700" text-anchor="start" xml:space="preserve">LEGEND</text>
@@ -95,7 +95,7 @@
 <text x="1091" y="637" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#1f2328" font-weight="400" text-anchor="start" xml:space="preserve">next stage</text>
 <path d="M1201,631 L1251,631" fill="none" stroke="#cf222e" stroke-width="2.5" stroke-dasharray="8 7" marker-end="url(#ah-CORAL)"/>
 <text x="1261" y="637" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#1f2328" font-weight="400" text-anchor="start" xml:space="preserve">stop</text>
-<rect x="1321" y="618" width="80.75999999999999" height="26" rx="13.0" fill="#1a7f3733" stroke="#1a7f37"/>
-<text x="1361.38" y="635" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">startAt</text>
-<text x="1411.76" y="637" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#1f2328" font-weight="400" text-anchor="start" xml:space="preserve">resume point</text>
+<rect x="1321" y="618" width="106.8" height="26" rx="13.0" fill="#1a7f3733" stroke="#1a7f37"/>
+<text x="1374.4" y="635" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#1a7f37" font-weight="600" text-anchor="middle" xml:space="preserve">--start-at</text>
+<text x="1437.8" y="637" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#1f2328" font-weight="400" text-anchor="start" xml:space="preserve">resume point</text>
 </svg>
