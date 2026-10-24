@@ -111,3 +111,36 @@ test("the script refuses to run without config or with a lens it has no text for
   await assert.rejects(simulate({ ...args, config: undefined }, happy()), /args\.config is required/);
   await assert.rejects(simulate({ ...args, lenses: ["security"] }, happy()), /no lens text in config for: security/);
 });
+
+test("code review runs whatever lenses a hand launch names", async () => {
+  const { calls } = await simulate({ ...args, lenses: ["ux"] }, happy());
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "pr"]);
+  const { calls: dup } = await simulate({ ...args, lenses: ["code", "ux", "code"] }, happy());
+  assert.equal(dup.filter((c) => c.key === "review-code-r0").length, 1);
+});
+
+test("every stage checks the worktree's HEAD before working, with the path single-quoted", async () => {
+  const { calls } = await simulate({ ...args, worktree: "/tmp/my repo/issue-2" }, happy());
+  const guarded = calls.filter((c) => !c.key.startsWith("flag-"));
+  assert.equal(guarded.length, 5);
+  for (const c of guarded) {
+    assert.match(c.task, /BEFORE ANYTHING ELSE run: git -C '\/tmp\/my repo\/issue-2' rev-parse --abbrev-ref HEAD\nIf the output is not exactly issue-2-scaffold, change nothing and stop/, c.key);
+    assert.doesNotMatch(c.task, /\/tmp\/my repo\/issue-2(?<!')[ \n]/, c.key);
+  }
+});
+
+test("a stop creates the needs:human label if the repository lacks it, and reports whether it flagged", async () => {
+  const { result, task } = await simulate(args, happy({
+    spec: { structuredOutput: { status: "blocked", spec_path: "x", blocking_questions: ["Which DB?"] } },
+  }));
+  assert.match(task("flag-spec"), /gh label create needs:human -R owner\/repo --description "Waiting on a person" 2>\/dev\/null \|\| true\n\s+gh issue edit 2 -R owner\/repo --add-label needs:human/);
+  assert.doesNotMatch(task("flag-spec"), /rev-parse/, "flagging must work even when the worktree is wrong");
+  assert.equal(result.flagged, true);
+  const failed = await simulate(args, (key, o) => (key === "flag-spec" ? { ok: false } : happy({ spec: { structuredOutput: { status: "blocked", spec_path: "x", blocking_questions: [] } } })(key)));
+  assert.equal(failed.result.flagged, false);
+});
+
+test("the PR stage creates the needs:human label before adding it", async () => {
+  const { task } = await simulate(args, happy());
+  assert.match(task("pr"), /gh label create needs:human -R owner\/repo --description "Waiting on a person" 2>\/dev\/null \|\| true\n\s+gh pr edit issue-2-scaffold -R owner\/repo --add-label needs:human/);
+});

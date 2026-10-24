@@ -28,7 +28,8 @@ const repo = args.repo;
 const issue = args.issue;
 const cwd = args.worktree;
 const branch = args.branch;
-const lenses = args.lenses && args.lenses.length ? args.lenses : ["code"];
+// `code` always runs, whatever the caller names; the others are added to it.
+const lenses = Array.from(new Set(["code"].concat(args.lenses || [])));
 const LENS = config.lenses;
 const unknownLenses = lenses.filter((l) => !LENS[l]);
 if (unknownLenses.length) throw new Error(`no lens text in config for: ${unknownLenses.join(", ")}`);
@@ -58,12 +59,20 @@ const commitCmd = config.commitAuthor
   ? `git -c ${shellQuote(`user.name=${config.commitAuthor.name}`)} -c ${shellQuote(`user.email=${config.commitAuthor.email}`)} commit`
   : "git commit";
 
-const COMMON = `
-Repository: ${repo}, issue #${issue}. Working directory (a git worktree on branch ${branch}): ${cwd}
+const cwdQ = shellQuote(cwd);
+const CONTEXT = `
+Repository: ${repo}, issue #${issue}. Working directory (a git worktree on branch ${branch}): ${cwdQ}
 Read AGENTS.md in that directory first and follow it. ${config.design}
-Work only inside ${cwd}. Never touch main, never merge, never force-push, never git stash.
+Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never git stash.
 Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
+// The validator pins the names but cannot look at the disk: every stage checks that the directory
+// really is the issue's worktree before it does anything else.
+const COMMON = `${CONTEXT}
+BEFORE ANYTHING ELSE run: git -C ${cwdQ} rev-parse --abbrev-ref HEAD
+If the output is not exactly ${branch}, change nothing and stop: a stage with a status reports
+"blocked" and names the mismatch in summary or blocking_questions; a reviewer reports verdict
+"changes" with one blocker finding; the PR stage reports pr_url as an empty string.`;
 
 // Skills handed to stages (config.skills). The built-in worker/reviewer agents set
 // inheritSkills: false, so a child sees a skill only when named here. A missing skill is a warning.
@@ -111,9 +120,11 @@ function flagHuman(key, why) {
     agent: "worker",
     model: HAIKU,
     cwd,
-    task: `${COMMON}
+    task: `${CONTEXT}
 
-Do not change any file. Run:
+Do not change any file. Make sure the label exists, then add it (the first command does nothing
+if the repository already has the label):
+  gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
   gh issue edit ${issue} -R ${repo} --add-label ${NEEDS_HUMAN}
 then post this as a comment on the issue with gh issue comment ${issue} -R ${repo} --body-file -:
 
@@ -156,8 +167,8 @@ if (stageRuns("spec")) {
   specOut = spec.structuredOutput || {};
   if (!spec.ok || specOut.status !== "ready") {
     const questions = (specOut.blocking_questions || []).map((q) => `- ${q}`).join("\n");
-    await flagHuman("flag-spec", `Stage: spec. ${questions ? `Blocking questions:\n${questions}` : `Error: ${spec.error || "no structured output"}`}`);
-    return { stage: "spec", stopped: true, spec: specOut, error: spec.error || null };
+    const flag = await flagHuman("flag-spec", `Stage: spec. ${questions ? `Blocking questions:\n${questions}` : `Error: ${spec.error || "no structured output"}`}`);
+    return { stage: "spec", stopped: true, flagged: flag.ok, spec: specOut, error: spec.error || null };
   }
 }
 
@@ -180,7 +191,7 @@ if (stageRuns("implement")) {
   You are the IMPLEMENT stage. Implement exactly ${specPath}; it is the contract. Do not redesign.
   Work in the foreground (never leave background processes running).
   ${config.implement}
-  Run these checks from ${cwd} and fix failures:
+  Run these checks from ${cwdQ} and fix failures:
 ${checkList}
   Commit in small, well-described commits. Report changed_files (paths relative to the repo root)
   and each check's result by name ("n/a" only if the change cannot affect it).
@@ -188,8 +199,8 @@ ${checkList}
   });
   implOut = impl.structuredOutput || {};
   if (!impl.ok || implOut.status !== "done") {
-    await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
-    return { stage: "implement", stopped: true, spec: specOut, implement: implOut, error: impl.error || null };
+    const flag = await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
+    return { stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || null };
   }
 }
 
@@ -353,7 +364,10 @@ You are the PR stage. Do not change code.
 4. If a PR for ${branch} already exists (gh pr view ${branch} -R ${repo}), replace its body with
    gh pr edit and keep its title${draft ? " and mark it draft (gh pr ready --undo)" : ""}. Otherwise:
    gh pr create -R ${repo} --base main --head ${branch} ${draft ? "--draft " : ""}with a title naming the change.
-   Either way, add the label: gh pr edit ${branch} -R ${repo} --add-label ${NEEDS_HUMAN}
+   Either way, make sure the label exists and add it (the first command does nothing if the
+   repository already has the label):
+   gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
+   gh pr edit ${branch} -R ${repo} --add-label ${NEEDS_HUMAN}
 5. Report the PR URL and the follow-up issue number.`,
 });
 const prOut = pr.structuredOutput || {};

@@ -19,8 +19,8 @@ matters and the fast model where volume does. The script is
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
 **Review lenses** are defined per repository in `.pi/factory.json`: a name and the text the
-reviewer is told to check. `code` is required and runs on every issue (`defaultLenses` may add
-more, but must include it); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
+reviewer is told to check. `code` is required and runs on every issue, however the run is launched (the script adds it to any
+`lenses` it is given; `defaultLenses` may add more, but must include it); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
 example, defines `code`, `ux` (agent and developer experience of its MCP tools) and `security`;
 bioc-support-archive defines `code`, `ux` (a reader on an old link) and `privacy`. See
 [`examples/`](../examples).
@@ -46,8 +46,8 @@ findings remain after round two, the PR opens as a **draft** listing them.
 (a sub-issue of `parent` when given), and the PR links it.
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
-implementation reporting `blocked` stops before review. Both label the issue `needs:human` and
-comment why. Every PR the factory opens is labelled `needs:human` too; remove the label when you
+implementation reporting `blocked` stops before review. Both label the issue `needs:human` (creating the label first if the repository lacks it) and
+comment why; the run's result says whether the flag succeeded (`flagged`). Every PR the factory opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
 **Resuming:** `--start-at implement` skips the spec stage (the spec must already be on the branch);
@@ -143,14 +143,16 @@ asynchronously through pi-subagents. Follow the run with `/subagents-fleet`.
 The slug comes from the issue's title only for a new branch. If the issue already has a branch
 (the worktree's current one, else the one `issue-<n>-*` branch locally or on origin), that branch and its
 slug are used, so retitling an issue or making the branch by hand does not break `--start-at`; several
-such branches are an error that lists them. The repository must have the `needs:human` label (every stop
-uses it; `/factory` stops with the `gh label create` command if it is missing) and should have `seam` and
+such branches are an error that lists them. The repository should have the `needs:human` label (`/factory` stops early with the `gh label create`
+command if it is missing; the stages also create it when they flag a stop, so hand launches are covered) and should have `seam` and
 `review:<lens>` for the lenses it defines (a warning if not).
 
 Launching by hand still works, for scripts or other agents: pass the same args `/factory --dry-run`
 prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
-`issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>`, so a stage
-can never be pointed at `main` or at a path outside an issue's worktree.
+`issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
+metacharacters. The validator cannot read the disk, so every stage's first step is
+`git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue branch, the stage
+changes nothing and reports blocked (a reviewer, one blocker finding; the PR stage, an empty `pr_url`).
 
 ```js
 subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })

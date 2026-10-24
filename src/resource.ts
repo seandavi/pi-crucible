@@ -22,6 +22,8 @@ type Args = Readonly<Record<string, unknown>>;
 type Check = (value: unknown) => string | null;
 
 const STAGES = ["spec", "implement", "review"];
+// The worktree path is written into commands the stages run; spaces are fine (it is single-quoted there).
+const UNSAFE_PATH_CHARS = /[\x00-\x1f\x7f`$\\"';|&<>(){}*?!~]/;
 
 const isPositiveInt = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 const str: Check = (v) => (typeof v === "string" && v.trim() ? null : "must be a non-empty string");
@@ -96,7 +98,7 @@ export function argErrors(args: Args): string[] {
   }
   if (!errors.length) {
     const defined = (args.config as { lenses: Record<string, string> }).lenses;
-    const lenses = (args.lenses as string[] | undefined) ?? ["code"];
+    const lenses = ["code", ...((args.lenses as string[] | undefined) ?? [])];
     const missing = lenses.filter((l) => !defined[l]);
     if (missing.length) errors.push(`no lens text in config.lenses for: ${missing.join(", ")}`);
     // This validator is the only guard for hand launches. Pin the names the launcher derives, so
@@ -106,6 +108,9 @@ export function argErrors(args: Args): string[] {
     if (branch !== `issue-${issue}-${slug}`) errors.push(`arg "branch" must be "issue-${issue}-${slug}" (issue-<issue>-<slug>)`);
     if (path.posix.normalize(worktree) !== worktree || !worktree.endsWith(`/issue-${issue}`)) {
       errors.push(`arg "worktree" must be a normalized absolute path ending in /issue-${issue}`);
+    }
+    if (UNSAFE_PATH_CHARS.test(worktree)) {
+      errors.push('arg "worktree" may not contain control characters or shell metacharacters (` $ \\ " \' ; | & < > ( ) { } * ? ! ~)');
     }
   }
   return errors;
