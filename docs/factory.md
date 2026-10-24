@@ -46,7 +46,8 @@ findings remain after round two, the PR opens as a **draft** listing them.
 (a sub-issue of `parent` when given), and the PR links it.
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
-implementation reporting `blocked` stops before review. Both label the issue `needs:human` (creating the label first if the repository lacks it) and
+implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
+the run at the end. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
 comment why; the run's result says whether the flag succeeded (`flagged`). Every PR the factory opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
@@ -150,9 +151,10 @@ command if it is missing; the stages also create it when they flag a stop, so ha
 Launching by hand still works, for scripts or other agents: pass the same args `/factory --dry-run`
 prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
 `issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
-metacharacters. The validator cannot read the disk, so every stage's first step is
-`git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue branch, the stage
-changes nothing and reports blocked (a reviewer, one blocker finding; the PR stage, an empty `pr_url`).
+metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,
+revise, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
+branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
+read-only and have no shell, so they skip the check.
 
 ```js
 subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })

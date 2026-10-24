@@ -119,10 +119,10 @@ test("code review runs whatever lenses a hand launch names", async () => {
   assert.equal(dup.filter((c) => c.key === "review-code-r0").length, 1);
 });
 
-test("every stage checks the worktree's HEAD before working, with the path single-quoted", async () => {
+test("every writing stage checks the worktree's HEAD before working, with the path single-quoted", async () => {
   const { calls } = await simulate({ ...args, worktree: "/tmp/my repo/issue-2" }, happy());
-  const guarded = calls.filter((c) => !c.key.startsWith("flag-"));
-  assert.equal(guarded.length, 5);
+  const guarded = calls.filter((c) => !c.key.startsWith("flag-") && !c.key.startsWith("review-"));
+  assert.deepEqual(guarded.map((c) => c.key), ["spec", "implement", "pr"]);
   for (const c of guarded) {
     assert.match(c.task, /BEFORE ANYTHING ELSE run: git -C '\/tmp\/my repo\/issue-2' rev-parse --abbrev-ref HEAD\nIf the output is not exactly issue-2-scaffold, change nothing and stop/, c.key);
     assert.doesNotMatch(c.task, /\/tmp\/my repo\/issue-2(?<!')[ \n]/, c.key);
@@ -143,4 +143,23 @@ test("a stop creates the needs:human label if the repository lacks it, and repor
 test("the PR stage creates the needs:human label before adding it", async () => {
   const { task } = await simulate(args, happy());
   assert.match(task("pr"), /gh label create needs:human -R owner\/repo --description "Waiting on a person" 2>\/dev\/null \|\| true\n\s+gh pr edit issue-2-scaffold -R owner\/repo --add-label needs:human/);
+});
+
+test("only the writing stages run the worktree check; reviewers have no shell", async () => {
+  const { calls } = await simulate(args, happy());
+  for (const c of calls) {
+    const writes = !c.key.startsWith("review-");
+    assert.equal(/rev-parse --abbrev-ref HEAD/.test(c.task), writes, c.key);
+  }
+});
+
+test("a PR stage that opens no PR, or fails, flags a human and stops", async () => {
+  for (const pr of [{ structuredOutput: { pr_url: "" } }, { ok: false, error: "boom" }]) {
+    const { result, calls } = await simulate(args, happy({ pr }));
+    assert.equal(calls.at(-1)?.key, "flag-pr");
+    assert.equal(result.stopped, true);
+    assert.equal(result.stage, "pr");
+  }
+  const { calls } = await simulate(args, happy({ pr: { ok: false, error: "boom" } }));
+  assert.match(calls.at(-1)!.task, /Stage: pr\. boom/);
 });

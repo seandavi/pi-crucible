@@ -66,13 +66,15 @@ Read AGENTS.md in that directory first and follow it. ${config.design}
 Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never git stash.
 Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
-// The validator pins the names but cannot look at the disk: every stage checks that the directory
-// really is the issue's worktree before it does anything else.
+// The validator pins the names but cannot look at the disk: every stage that writes (spec,
+// implement, revise, PR; all on the worker agent, which has bash) checks that the directory really
+// is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
+// they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
 const COMMON = `${CONTEXT}
 BEFORE ANYTHING ELSE run: git -C ${cwdQ} rev-parse --abbrev-ref HEAD
 If the output is not exactly ${branch}, change nothing and stop: a stage with a status reports
-"blocked" and names the mismatch in summary or blocking_questions; a reviewer reports verdict
-"changes" with one blocker finding; the PR stage reports pr_url as an empty string.`;
+"blocked" and names the mismatch in summary or blocking_questions; the PR stage reports pr_url as
+an empty string.`;
 
 // Skills handed to stages (config.skills). The built-in worker/reviewer agents set
 // inheritSkills: false, so a child sees a skill only when named here. A missing skill is a warning.
@@ -222,7 +224,7 @@ function reviewTask(lens, files, round, prior) {
   const scope = files.length
     ? `the changed files: ${files.join(", ")}`
     : `every file changed on this branch (git diff --name-only origin/main...HEAD)`;
-  return `${COMMON}
+  return `${CONTEXT}
 
 You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
 Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and ${scope}.
@@ -371,6 +373,12 @@ You are the PR stage. Do not change code.
 5. Report the PR URL and the follow-up issue number.`,
 });
 const prOut = pr.structuredOutput || {};
+// No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
+if (!pr.ok || !prOut.pr_url) {
+  const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
+  const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
+  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, error: pr.error || null, engine: args.engine || null };
+}
 
 return {
   issue,
