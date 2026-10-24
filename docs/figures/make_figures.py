@@ -118,21 +118,27 @@ def factory_flow(theme: dict[str, str]) -> str:
                                       ("<lens>", "review:<lens>")]):
         f.tag_box(950, 160 + i * 66, 240, 54, lens, when)
 
-    f.box(1280, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
+    f.box(1280, top, 240, h, "Integrate · Haiku", ["fetch, merge", "  origin/main", "run every check",
+                                                   "never stops the run"], "CORAL")
+    f.box(1580, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
                                              "label needs:human"], "BLUE")
-    f.add(f.text(1280, top + h + 28, "draft if blocker/major", 14, theme["MUTED"], mono=True))
-    f.add(f.text(1280, top + h + 50, "findings remain or", 14, theme["MUTED"], mono=True))
-    f.add(f.text(1280, top + h + 72, "checks fail", 14, theme["MUTED"], mono=True))
-    f.box(1580, top, 210, h, "A human merges", ["review the PR", "drop needs:human", "never automated"],
+    for i, note in enumerate(["draft if blocker/major", "findings remain,", "checks fail or", "main does not merge"]):
+        f.add(f.text(1580, top + h + 28 + i * 22, note, 14, theme["MUTED"], mono=True))
+    f.box(1880, top, 210, h, "A human merges", ["review the PR", "drop needs:human", "never automated"],
           "AMBER")
 
-    for x0, x1 in [(270, 325), (570, 625), (870, 925), (1210, 1275), (1520, 1575)]:
+    for x0, x1 in [(270, 325), (570, 625), (870, 925), (1210, 1275), (1520, 1575), (1820, 1875)]:
         f.arrow([(x0, mid), (x1, mid)])
 
     f.box(950, 470, 240, 140, "Revise · Sonnet", ["fix the root cause", "keep the spec in step",
                                                   "at most 2 rounds"], "BLUE")
     f.arrow([(1010, 369), (1010, 465)], "BLUE", "blocker/\nmajor", (1010, 417))
     f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked", (1130, 420))
+
+    f.box(1280, 470, 240, 160, "Fix · Sonnet", ["conflict or failing", "  check: one round", "code lens re-reviews",
+                                                "  non-test fixes"], "BLUE")
+    f.arrow([(1350, top + h + 3), (1350, 465)], "BLUE", "conflict or\nfailing check", (1350, 377))
+    f.arrow([(1460, 468), (1460, top + h + 3)], "CORAL", "re-check", (1460, 420))
 
     f.box(330, 470, 540, 140, "Flag · Haiku", ["label the issue needs:human,", "comment saying why;",
                                                "the run stops"], "CORAL")
@@ -147,11 +153,11 @@ def factory_flow(theme: dict[str, str]) -> str:
 
     # Legend
     ly = 680
-    f.add(f'<line x1="30" y1="{ly - 30}" x2="1790" y2="{ly - 30}" stroke="{theme["LINE"]}"/>\n')
+    f.add(f'<line x1="30" y1="{ly - 30}" x2="2090" y2="{ly - 30}" stroke="{theme["LINE"]}"/>\n')
     f.add(f.text(30, ly + 6, "LEGEND", 14, theme["MUTED"], 700, mono=True))
     x = 130
     for role, label in [("VIOLET", "Opus: judgment"), ("BLUE", "Sonnet: volume"),
-                        ("CORAL", "Haiku: diff, stop for a human"), ("AMBER", "a person"),
+                        ("CORAL", "Haiku: diff, merge and checks, flag a human"), ("AMBER", "a person"),
                         ("MUTED", "the caller")]:
         f.add(f'<rect x="{x}" y="{ly - 10}" width="22" height="22" rx="5" fill="{theme[role]}1f" '
               f'stroke="{theme[role]}" stroke-width="2"/>\n')
@@ -167,10 +173,11 @@ def factory_flow(theme: dict[str, str]) -> str:
     w = f.pill(x, ly - 12, "--start-at", "GREEN")
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
-    return f.svg(1820, 720, "The factory workflow: launch, spec (Opus), implement (Sonnet), a diff "
+    return f.svg(2120, 720, "The factory workflow: launch, spec (Opus), implement (Sonnet), a diff "
                             "(Haiku) before each round of parallel review lenses (Opus), up to two "
-                            "revise rounds (Sonnet), then a PR (Sonnet) that a human merges. Spec or "
-                            "implement can stop and flag a human.")
+                            "revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix "
+                            "round), then a PR (Sonnet) that a human merges. Spec or implement can "
+                            "stop and flag a human.")
 
 
 if __name__ == "__main__":
