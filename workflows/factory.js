@@ -52,8 +52,10 @@ const checkList = CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n");
 const engineNote = args.engine && args.engine.commit
   ? `seandavi/pi-factory@${args.engine.commit}${args.engine.dirty ? " (with uncommitted changes)" : ""}`
   : "unknown (launched without /factory)";
+// Single-quoted for the shell, so nothing in the configured identity is expanded.
+const shellQuote = (text) => `'${String(text).replace(/'/g, "'\\''")}'`;
 const commitCmd = config.commitAuthor
-  ? `git -c user.name="${config.commitAuthor.name}" -c user.email=${config.commitAuthor.email} commit`
+  ? `git -c ${shellQuote(`user.name=${config.commitAuthor.name}`)} -c ${shellQuote(`user.email=${config.commitAuthor.email}`)} commit`
   : "git commit";
 
 const COMMON = `

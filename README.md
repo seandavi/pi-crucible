@@ -51,6 +51,16 @@ review lenses, the checks to run and any project rules for the stages. Start fro
 [bioc-support-archive](examples/bioc-support-archive.factory.json) (Python pipeline and a Worker,
 `code`/`ux`/`privacy`). The fields are in [docs/factory.md](docs/factory.md#configuring-a-repository).
 
+Create the labels the factory uses. `needs:human` is required (every stop and every PR carries it;
+`/factory` refuses to start without it); `seam` and one `review:<lens>` per lens other than `code` let
+issues ask for them:
+
+```sh
+gh label create needs:human --description "Waiting on a person"
+gh label create seam --description "Shared foundation; reviewers rate by blast radius"
+gh label create review:ux --description "Add the ux review lens"   # one per lens in .pi/factory.json
+```
+
 ## Run it on an issue
 
 In pi, inside the repository:
@@ -61,7 +71,7 @@ In pi, inside the repository:
 ```
 
 Lenses come from the issue's `review:<lens>` labels, and the `seam` label marks a shared
-foundation. Resume with `--start-at implement` or `--start-at review`. Then work your queue:
+foundation. Resume with `--start-at implement` or `--start-at review` (an issue keeps its branch even if it is retitled). Then work your queue:
 `gh issue list -l needs:human` and `gh pr list -l needs:human`.
 
 ## Status

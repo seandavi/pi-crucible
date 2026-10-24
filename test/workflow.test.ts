@@ -53,6 +53,12 @@ test("every stage's prompt comes from the config, not the engine", async () => {
   assert.deepEqual(result.engine, { commit: "4d310bf", dirty: true });
 });
 
+test("the commit identity is single-quoted, so no part of it reaches the shell", async () => {
+  const config = { ...engineConfig, commitAuthor: { name: "Pat O'Brien", email: "pat@example.org" } };
+  const { task } = await simulate({ ...args, config }, happy());
+  assert.ok(task("spec").includes(`git -c 'user.name=Pat O'\\''Brien' -c 'user.email=pat@example.org' commit`));
+});
+
 test("models, skills, commit identity and spec dir follow the config", async () => {
   const config = {
     ...engineConfig,
@@ -70,7 +76,7 @@ test("models, skills, commit identity and spec dir follow the config", async () 
   assert.equal(by("review-code-r0").skill, "code-skill");
   assert.equal(by("review-ux-r0").skill, undefined);
   assert.match(task("spec"), /Write design\/specs\/2-scaffold\.md/);
-  assert.match(task("spec"), /git -c user\.name="A B" -c user\.email=a@b\.c commit/);
+  assert.match(task("spec"), /git -c 'user\.name=A B' -c 'user\.email=a@b\.c' commit/);
 });
 
 test("a failing configured check makes the PR a draft", async () => {

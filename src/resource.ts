@@ -5,6 +5,7 @@
 // not do I/O, so the extension reads the script once per session and hands it in here.
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { engineConfigErrors } from "./config.ts";
 
 export const RESOURCE_NAME = "pi-factory";
@@ -98,6 +99,14 @@ export function argErrors(args: Args): string[] {
     const lenses = (args.lenses as string[] | undefined) ?? ["code"];
     const missing = lenses.filter((l) => !defined[l]);
     if (missing.length) errors.push(`no lens text in config.lenses for: ${missing.join(", ")}`);
+    // This validator is the only guard for hand launches. Pin the names the launcher derives, so
+    // stages cannot be pointed at main (or a path outside the issue's worktree) and the branch
+    // is safe to put in shell commands.
+    const { issue, slug, branch, worktree } = args as { issue: number; slug: string; branch: string; worktree: string };
+    if (branch !== `issue-${issue}-${slug}`) errors.push(`arg "branch" must be "issue-${issue}-${slug}" (issue-<issue>-<slug>)`);
+    if (path.posix.normalize(worktree) !== worktree || !worktree.endsWith(`/issue-${issue}`)) {
+      errors.push(`arg "worktree" must be a normalized absolute path ending in /issue-${issue}`);
+    }
   }
   return errors;
 }

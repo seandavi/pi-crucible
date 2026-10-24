@@ -7,6 +7,8 @@ import extension from "../extensions/factory.ts";
 import { engineConfigErrors, factoryFileErrors } from "../src/config.ts";
 import {
   ensureWorktree,
+  findIssueBranch,
+  labelProblems,
   parseCommand,
   pickLenses,
   planLaunch,
@@ -89,10 +91,15 @@ function scripted(rules: [RegExp, { stdout?: string; code?: number; stderr?: str
   return { exec, calls, lines: () => calls.map((c) => `${c.cmd} ${c.args.join(" ")}`) };
 }
 
-const repoRules = (state = "OPEN"): [RegExp, { stdout?: string; code?: number }][] => [
+const repoRules = (state = "OPEN", extra: [RegExp, { stdout?: string; code?: number }][] = []): [RegExp, { stdout?: string; code?: number }][] => [
+  ...extra,
   [/^git rev-parse --path-format=absolute --git-common-dir$/, { stdout: "/src/pi-factory/.git\n" }],
   [/^git remote get-url origin$/, { stdout: "git@github.com:seandavi/pi-factory.git\n" }],
   [/^gh issue view 4 -R seandavi\/pi-factory/, { stdout: JSON.stringify({ number: 4, title: issue.title, state, labels: [{ name: "seam" }] }) }],
+  [/^gh label list -R seandavi\/pi-factory/, { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) }],
+  [/^git fetch origin$/, {}],
+  [/^git -C .* rev-parse --abbrev-ref HEAD$/, { code: 128 }],
+  [/^git for-each-ref /, { stdout: "" }],
   [/^git -C .* rev-parse HEAD$/, { stdout: "0123456789abcdef0123456789abcdef01234567\n" }],
   [/^git -C .* status --porcelain/, { stdout: "" }],
 ];
@@ -117,6 +124,49 @@ test("prepare refuses invalid config and closed issues with actionable errors", 
   await assert.rejects(prepare(scripted(repoRules()).exec, "/x", options, missing), /cannot read \/src\/pi-factory\/\.pi\/factory\.json: ENOENT/);
   const good = async () => JSON.stringify(factoryFile);
   await assert.rejects(prepare(scripted(repoRules("CLOSED")).exec, "/x", options, good), /seandavi\/pi-factory#4 is closed/);
+});
+
+test("an issue that already has a branch keeps it, whatever its title says now", async () => {
+  const read = async () => JSON.stringify(factoryFile);
+  const wt = "/src/pi-factory-worktrees/issue-4";
+  // Worktree present on the old slug: it decides, so --start-at review still finds its branch and spec.
+  let plan = await prepare(scripted(repoRules("OPEN", [[new RegExp(`^git -C ${wt} rev-parse --abbrev-ref HEAD$`), { stdout: "issue-4-old-title\n" }]])).exec, "/x", options, read);
+  assert.equal(plan.branch, "issue-4-old-title");
+  assert.equal(plan.args.slug, "old-title");
+  assert.deepEqual(argErrors(plan.args), []);
+  // No worktree: a hand-made local branch, also listed on origin, counts once.
+  const refs = "refs/heads/issue-4-by-hand\nrefs/remotes/origin/issue-4-by-hand\nrefs/remotes/origin/issue-40-other\n";
+  plan = await prepare(scripted(repoRules("OPEN", [[/^git for-each-ref /, { stdout: refs }]])).exec, "/x", { ...options, startAt: "review" }, read);
+  assert.equal(plan.branch, "issue-4-by-hand");
+  // Several candidates: say which, rather than pick.
+  await assert.rejects(
+    prepare(scripted(repoRules("OPEN", [[/^git for-each-ref /, { stdout: "refs/heads/issue-4-a\nrefs/remotes/origin/issue-4-b\n" }]])).exec, "/x", options, read),
+    /issue #4 has several branches \(issue-4-a, issue-4-b\)/,
+  );
+  // Nothing yet: the title names the branch.
+  assert.equal((await prepare(scripted(repoRules()).exec, "/x", options, read)).branch, "issue-4-reviewers-always-get-the-diff");
+  // A worktree on another branch (say main) does not decide anything.
+  const s = scripted([[/rev-parse --abbrev-ref HEAD/, { stdout: "main\n" }], [/^git for-each-ref /, { stdout: "" }]]);
+  assert.equal(await findIssueBranch(s.exec, "/src/r", "/src/r-worktrees/issue-4", 4), null);
+});
+
+test("prepare insists on needs:human and suggests the other labels", async () => {
+  const read = async () => JSON.stringify(factoryFile);
+  const noLabels: [RegExp, { stdout?: string }] = [/^gh label list /, { stdout: "[]" }];
+  await assert.rejects(prepare(scripted(repoRules("OPEN", [noLabels])).exec, "/x", options, read), /no "needs:human" label.*gh label create 'needs:human' -R seandavi\/pi-factory/);
+  const file = { ...factoryFile, lenses: { code: "c", ux: "u" } };
+  assert.deepEqual(labelProblems(file, "o/r", ["Needs:Human"]), {
+    errors: [],
+    warnings: ["o/r lacks the label(s) seam, review:ux, so issues cannot ask for them. Create: gh label create 'seam' -R o/r; gh label create 'review:ux' -R o/r"],
+  });
+  assert.deepEqual(labelProblems(file, "o/r", ["needs:human", "seam", "review:ux"]), { errors: [], warnings: [] });
+  const plan = await prepare(scripted(repoRules("OPEN", [[/^gh label list /, { stdout: '[{"name":"needs:human"}]' }]])).exec, "/x", options, read);
+  assert.match(plan.warnings.join(), /lacks the label\(s\) seam, review:ux/);
+});
+
+test("a failed fetch is a warning, not a stop", async () => {
+  const plan = await prepare(scripted(repoRules("OPEN", [[/^git fetch origin$/, { code: 1, stderr: "offline" }]])).exec, "/x", options, async () => JSON.stringify(factoryFile));
+  assert.match(plan.warnings.join(), /could not fetch origin .*offline.*local refs/);
 });
 
 const plan = (startAt: Plan["startAt"] = "spec"): Plan => ({
@@ -147,6 +197,7 @@ test("/factory prepares the worktree and launches the named resource over RPC", 
     if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
     if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-factory.git" };
     if (line.startsWith("gh issue view")) return { stdout: JSON.stringify({ number: 4, title: "Diff for reviewers", state: "OPEN", labels: [] }) };
+    if (line.startsWith("gh label list")) return { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) };
     if (line.includes("rev-parse HEAD")) return { stdout: "abcdef1" };
     if (line.includes("--verify --quiet")) return { code: 1 };
     return {};
@@ -190,4 +241,18 @@ test("example configs and this repo's own config are valid; the schema file is c
   assert.deepEqual(factoryFileErrors(readJson(".pi/factory.json")), []);
   assert.equal(readFileSync(SCHEMA_PATH, "utf8"), schemaText(), "run npm run schema");
   assert.deepEqual(engineConfigErrors({}).length > 0, true);
+});
+
+test("defaultLenses must include code, and the commit identity cannot carry shell syntax", () => {
+  const lenses = { code: "c", ux: "u" };
+  assert.deepEqual(factoryFileErrors({ ...factoryFile, lenses, defaultLenses: ["code", "ux"] }), []);
+  assert.deepEqual(factoryFileErrors({ ...factoryFile, lenses, defaultLenses: ["ux"] }), ['/defaultLenses: must include "code"']);
+  const author = (name: string, email: string) => factoryFileErrors({ ...factoryFile, commitAuthor: { name, email } }).length;
+  assert.equal(author("Pat O'Brien", "pat@example.org"), 0);
+  assert.equal(author('Sean "SD" Davis', "sd+bot@example.org"), 0);
+  assert.ok(author("$(id)", "a@b.c") > 0);
+  assert.ok(author("`id`", "a@b.c") > 0);
+  assert.ok(author("A\nB", "a@b.c") > 0);
+  assert.ok(author("A B", "a@b;git push -f origin main") > 0);
+  assert.ok(author("A B", "a@b$(id)") > 0);
 });

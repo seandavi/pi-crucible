@@ -44,6 +44,18 @@ test("config and engine are validated, and lenses must have config text", () => 
   assert.deepEqual(argErrors({ ...valid, lenses: ["code", "security"] }), ["no lens text in config.lenses for: security"]);
 });
 
+test("branch and worktree must be the ones the launcher derives", () => {
+  const bad = (over: Record<string, unknown>) => argErrors({ ...valid, ...over }).join();
+  assert.match(bad({ branch: "main" }), /arg "branch" must be "issue-2-scaffold"/);
+  assert.match(bad({ branch: "issue-2-scaffold; git push --force" }), /arg "branch" must be/);
+  assert.match(bad({ branch: "issue-3-scaffold" }), /arg "branch" must be/);
+  assert.match(bad({ worktree: "/tmp/../issue-2" }), /arg "worktree" must be a normalized absolute path ending in \/issue-2/);
+  assert.match(bad({ worktree: "/tmp/w/issue-2/" }), /arg "worktree" must be/);
+  assert.match(bad({ worktree: "/src/repo" }), /arg "worktree" must be/);
+  assert.match(bad({ worktree: "/tmp/w/issue-3" }), /arg "worktree" must be/);
+  assert.deepEqual(argErrors(valid), []);
+});
+
 test("extension registers per session and disposes on shutdown", async () => {
   const { resolveWorkflowResource } = await import(
     new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href

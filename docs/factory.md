@@ -19,8 +19,8 @@ matters and the fast model where volume does. The script is
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
 **Review lenses** are defined per repository in `.pi/factory.json`: a name and the text the
-reviewer is told to check. `code` is required and runs on every issue (or whatever
-`defaultLenses` lists); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
+reviewer is told to check. `code` is required and runs on every issue (`defaultLenses` may add
+more, but must include it); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
 example, defines `code`, `ux` (agent and developer experience of its MCP tools) and `security`;
 bioc-support-archive defines `code`, `ux` (a reader on an old link) and `privacy`. See
 [`examples/`](../examples).
@@ -74,14 +74,14 @@ and `.pi/factory.json`. The engine holds no project text; everything below reach
 | `implement` | implement | Project rules: fixtures, data tests must never read, setup steps. |
 | `checks` | implement, revise, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. |
 | `lenses` | review | `{name: text}`; `code` is required. |
-| `defaultLenses` | `/factory` | Lenses every run gets (default `["code"]`). |
+| `defaultLenses` | `/factory` | Lenses every run gets; must include `code` (default `["code"]`). |
 | `seamNote` | review | What later issues build on, for the `seam` reviewer note. |
 | `skills` | implement, revise, review | `{build, lenses: {name: skill}}`. |
 | `specDir` | spec | Default `docs/specs`. |
 | `worktreeRoot` | `/factory` | Default `../<repo>-worktrees`, relative to the main checkout. |
 | `parent` | PR | Tracking issue; the follow-up issue becomes its sub-issue. |
 | `repo` | `/factory` | `owner/name`, when the `origin` remote does not say. |
-| `commitAuthor` | every writing stage | `{name, email}`; default is the worktree's git config. |
+| `commitAuthor` | every writing stage | `{name, email}`; default is the worktree's git config. The name may not contain control characters, backticks, `$` or `\`; the email is `local@domain` in plain characters. Both are single-quoted in the commit command. |
 | `models` | every stage | `{strong, fast, small}` model ids; defaults are the claude-bridge Opus, Sonnet and Haiku 5.5. |
 
 **Table 2.** `.pi/factory.json` fields. Everything except `defaultLenses`, `worktreeRoot`, `parent`,
@@ -140,8 +140,17 @@ and `--lens`, and `seam` from the label. It then creates the worktree
 out an existing branch, which `--start-at` requires) and launches the `pi-factory` workflow
 asynchronously through pi-subagents. Follow the run with `/subagents-fleet`.
 
+The slug comes from the issue's title only for a new branch. If the issue already has a branch
+(the worktree's current one, else the one `issue-<n>-*` branch locally or on origin), that branch and its
+slug are used, so retitling an issue or making the branch by hand does not break `--start-at`; several
+such branches are an error that lists them. The repository must have the `needs:human` label (every stop
+uses it; `/factory` stops with the `gh label create` command if it is missing) and should have `seam` and
+`review:<lens>` for the lenses it defines (a warning if not).
+
 Launching by hand still works, for scripts or other agents: pass the same args `/factory --dry-run`
-prints.
+prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
+`issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>`, so a stage
+can never be pointed at `main` or at a path outside an issue's worktree.
 
 ```js
 subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })

@@ -62,7 +62,10 @@ export const EngineConfig = Type.Object(
     ),
     commitAuthor: Type.Optional(
       Type.Object(
-        { name: Type.String({ minLength: 1 }), email: Type.String({ pattern: "^[^@\\s]+@[^@\\s]+$" }) },
+        {
+          name: Type.String({ pattern: "^[^\\x00-\\x1f\\x7f`$\\\\]+$", description: "No control characters, backticks, $ or backslashes." }),
+          email: Type.String({ pattern: "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$" }),
+        },
         { additionalProperties: false, description: "Commit identity for the stages (default: the worktree's git config)." },
       ),
     ),
@@ -92,7 +95,7 @@ const LAUNCHER_FIELDS = {
   ),
   parent: Type.Optional(Type.Integer({ minimum: 1, description: "Tracking issue; follow-up issues become its sub-issues." })),
   defaultLenses: Type.Optional(
-    Type.Array(Name, { minItems: 1, description: 'Lenses every run gets (default ["code"]).' }),
+    Type.Array(Name, { minItems: 1, description: 'Lenses every run gets; must include "code" (default ["code"]).' }),
   ),
 };
 
@@ -137,6 +140,7 @@ export function engineConfigErrors(value: unknown): string[] {
 export function factoryFileErrors(value: unknown): string[] {
   if (!Value.Check(FactoryFile, value)) return errors(FactoryFile, value, []);
   const out = engineRules(value);
+  if (value.defaultLenses && !value.defaultLenses.includes("code")) out.push('/defaultLenses: must include "code"');
   for (const lens of value.defaultLenses ?? []) {
     if (!value.lenses[lens]) out.push(`/defaultLenses: no lens named "${lens}"`);
   }

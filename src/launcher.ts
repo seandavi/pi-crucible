@@ -1,7 +1,7 @@
 // The /factory command's logic: from "/factory 12" in a repo checkout to the workflow's args.
 //
 //   parseCommand  "/factory" arguments → issue number and options
-//   prepare       reads .pi/factory.json, the issue and the engine commit; plans the launch
+//   prepare       reads .pi/factory.json, the issue, its branch and the engine commit; plans the launch
 //   ensureWorktree creates (or reuses) the issue's worktree and branch
 //
 // Side effects go through an injected `exec`, so tests can run without git, gh or a network.
@@ -100,6 +100,10 @@ export function worktreeRootFor(file: FactoryFile, repoRoot: string, home = home
   return path.resolve(repoRoot, root);
 }
 
+export function worktreeFor(file: FactoryFile, repoRoot: string, issue: number, home = homedir()): string {
+  return path.join(worktreeRootFor(file, repoRoot, home), `issue-${issue}`);
+}
+
 /** "owner/name" from a GitHub remote URL (https or ssh), or null. */
 export function repoFromRemote(url: string): string | null {
   const m = /github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url.trim());
@@ -128,13 +132,16 @@ export function planLaunch(input: {
   repo: string;
   issue: Issue;
   options: CommandOptions;
+  existingBranch?: string;
   engine?: { commit: string; dirty?: boolean };
   home?: string;
 }): Plan {
   const { file, repoRoot, repo, issue, options } = input;
-  const slug = slugify(issue.title);
-  const branch = `issue-${issue.number}-${slug}`;
-  const worktree = path.join(worktreeRootFor(file, repoRoot, input.home), `issue-${issue.number}`);
+  // An existing branch decides the slug (and so the spec path); the title only names a new branch.
+  const prefix = `issue-${issue.number}-`;
+  const slug = input.existingBranch ? input.existingBranch.slice(prefix.length) : slugify(issue.title);
+  const branch = `${prefix}${slug}`;
+  const worktree = worktreeFor(file, repoRoot, issue.number, input.home);
   const { lenses, seam, warnings } = pickLenses(file, issue.labels, options.lenses);
   const args: Record<string, unknown> = {
     repo,
@@ -160,6 +167,39 @@ async function run(exec: Exec, cmd: string, args: string[], cwd?: string): Promi
   const r = await exec(cmd, args, cwd ? { cwd } : undefined);
   if (r.code !== 0) throw new Error(`${cmd} ${args.join(" ")} failed: ${(r.stderr || r.stdout).trim()}`);
   return r.stdout.trim();
+}
+
+/**
+ * The branch this issue already has, so a retitled issue still resumes: the worktree's current branch,
+ * else the one `issue-<n>-*` branch among local and origin refs. Null when there is none; throws when
+ * there are several.
+ */
+export async function findIssueBranch(exec: Exec, repoRoot: string, worktree: string, issue: number): Promise<string | null> {
+  const prefix = `issue-${issue}-`;
+  const isIssueBranch = (name: string) => name.startsWith(prefix) && /^[a-z0-9][a-z0-9-]*$/.test(name.slice(prefix.length));
+  const current = await run(exec, "git", ["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
+  if (isIssueBranch(current)) return current;
+  const refs = await run(exec, "git", ["for-each-ref", "--format=%(refname)", `refs/heads/${prefix}*`, `refs/remotes/origin/${prefix}*`], repoRoot);
+  const names = new Set(
+    refs.split("\n").map((r) => r.replace(/^refs\/(heads|remotes\/origin)\//, "")).filter(isIssueBranch),
+  );
+  if (names.size > 1) throw new Error(`issue #${issue} has several branches (${[...names].join(", ")}); delete or rename all but one`);
+  return [...names][0] ?? null;
+}
+
+/** Lines of `gh label create` for the labels a repository lacks; the engine flags every stop with needs:human. */
+export function labelProblems(file: FactoryFile, repo: string, existing: string[]) {
+  const have = new Set(existing.map((l) => l.toLowerCase()));
+  const create = (name: string) => `gh label create '${name}' -R ${repo}`;
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!have.has("needs:human")) {
+    errors.push(`${repo} has no "needs:human" label, which the factory puts on every stop and every PR. Create it: ${create("needs:human")}`);
+  }
+  const optional = ["seam", ...Object.keys(file.lenses).filter((l) => l !== "code").map((l) => `review:${l}`)];
+  const missing = optional.filter((l) => !have.has(l));
+  if (missing.length) warnings.push(`${repo} lacks the label(s) ${missing.join(", ")}, so issues cannot ask for them. Create: ${missing.map(create).join("; ")}`);
+  return { errors, warnings };
 }
 
 /** The engine's own checkout: its commit, and whether tracked files differ from it. */
@@ -203,8 +243,20 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   if (raw.state !== "OPEN") throw new Error(`${repo}#${raw.number} is ${raw.state.toLowerCase()}`);
   const issue: Issue = { number: raw.number, title: raw.title, state: raw.state, labels: raw.labels.map((l) => l.name) };
 
+  const labels = JSON.parse(await run(exec, "gh", ["label", "list", "-R", repo, "--limit", "1000", "--json", "name"])) as { name: string }[];
+  const labelCheck = labelProblems(config, repo, labels.map((l) => l.name));
+  if (labelCheck.errors.length) throw new Error(labelCheck.errors.join("\n"));
+
+  // Remote branches are only known after a fetch; offline, the local refs still answer.
+  const fetchWarning: string[] = [];
+  await run(exec, "git", ["fetch", "origin"], repoRoot).catch((e: Error) => fetchWarning.push(`could not fetch origin (${e.message}); branch lookup used local refs`));
+  const worktree = worktreeFor(config, repoRoot, issue.number);
+  const existingBranch = (await findIssueBranch(exec, repoRoot, worktree, issue.number)) ?? undefined;
+
   const engine = await engineCommit(exec, PACKAGE_ROOT);
-  return planLaunch({ file: config, repoRoot, repo, issue, options, engine });
+  const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine });
+  plan.warnings.push(...labelCheck.warnings, ...fetchWarning);
+  return plan;
 }
 
 /** Create the issue's worktree, or reuse it if it is already on the issue's branch. Returns what it did. */
