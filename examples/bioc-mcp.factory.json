@@ -1,0 +1,33 @@
+{
+  "$schema": "https://raw.githubusercontent.com/seandavi/pi-factory/main/schema/factory.schema.json",
+  "worktreeRoot": "../bioc-mcp-worktrees",
+  "parent": 1,
+  "design": "The design spec for the whole project is https://raw.githubusercontent.com/seandavi/bioc-infrastructure/spec/mcp/proposal-mcp.qmd (fetch it with curl if you need it).",
+  "seamNote": "adapters and modules",
+  "spec": {
+    "design": "files to add/change, exported interfaces, zod schemas for every capability's input and output, MCP tool and REST route for each, upstream calls with example URLs and fixture files to record"
+  },
+  "implement": "Run npm ci first in a fresh worktree. Record fixtures by fetching the upstream URLs once with curl into test/fixtures/; tests must not use the network.",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "npm run typecheck"
+    },
+    {
+      "name": "test",
+      "command": "npm test"
+    }
+  ],
+  "lenses": {
+    "code": "CODE review. Correctness against the issue spec and its acceptance criteria; tests that would actually catch a regression (fixtures, no network); the one-capability-two-transports rule (no logic in transports/); deep modules with clear seams; type safety; dead code; dependency choices against AGENTS.md. The spec and the code must agree: rules, interfaces and example snippets in the spec match what the code does, because later issues copy the spec (a stale spec is \"major\").",
+    "ux": "AGENT + DEVELOPER UX review. Tool names; descriptions that say what the tool answers and when to use another tool instead; input/output schema clarity and defaults; error messages an agent can act on; result size (≤ ~8 KB text) and pagination; provenance on every result; REST paths, query params and OpenAPI quality; README/connection instructions for a first-time user.",
+    "security": "SECURITY review. SSRF (no capability fetches a caller-supplied URL or host); input validation and bounds; secret handling (code, fixtures, logs, CI); fork-PR CI safety (no secrets on pull_request, no pull_request_target); Host/Origin allowlist; rate limiting; that nothing non-public can be returned."
+  },
+  "skills": {
+    "build": "workers-best-practices",
+    "lenses": {
+      "code": "workers-best-practices",
+      "security": "workers-best-practices"
+    }
+  }
+}
