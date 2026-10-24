@@ -172,7 +172,7 @@
         "small": {
           "type": "string",
           "minLength": 1,
-          "description": "Flagging a human (default claude-bridge/claude-haiku-5-5)."
+          "description": "Flagging a human and writing the review diff (default claude-bridge/claude-haiku-5-5)."
         }
       },
       "additionalProperties": false

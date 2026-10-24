@@ -26,6 +26,7 @@ const happy = (overrides: Record<string, Answer> = {}) => (key: string): Answer 
   if (overrides[key]) return overrides[key];
   if (key === "spec") return { structuredOutput: { status: "ready", spec_path: "docs/specs/2-scaffold.md", blocking_questions: [] } };
   if (key === "implement") return { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: { test: "pass" } } };
+  if (key.startsWith("diff-")) return { structuredOutput: { status: "done", summary: "", changed_files: ["a.ts", "b.ts"], diff_lines: 120 } };
   if (key.startsWith("review-")) return { structuredOutput: { verdict: "approve", findings: [] } };
   if (key === "pr") return { structuredOutput: { pr_url: "https://github.com/o/r/pull/9", draft: false, followup_issue: null } };
   return { structuredOutput: {} };
@@ -35,7 +36,7 @@ const args = { ...validArgs, repo: "owner/repo", worktree: "/tmp/repo-worktrees/
 
 test("every stage's prompt comes from the config, not the engine", async () => {
   const { result, calls, task } = await simulate(args, happy());
-  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "pr"]);
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "pr"]);
   for (const c of calls) assert.match(c.task, /The design record is README\.md\./, c.key);
   assert.match(task("spec"), /Design \(files and interfaces\)/);
   assert.match(task("implement"), /Tests never use the network\.\n/);
@@ -63,7 +64,7 @@ test("models, skills, commit identity and spec dir follow the config", async () 
   const config = {
     ...engineConfig,
     specDir: "design/specs",
-    models: { strong: "p/strong", fast: "p/fast" },
+    models: { strong: "p/strong", fast: "p/fast", small: "p/small" },
     skills: { build: "build-skill", lenses: { code: "code-skill" } },
     commitAuthor: { name: "A B", email: "a@b.c" },
   };
@@ -72,6 +73,7 @@ test("models, skills, commit identity and spec dir follow the config", async () 
   assert.equal(by("spec").model, "p/strong");
   assert.equal(by("implement").model, "p/fast");
   assert.equal(by("pr").model, "p/fast");
+  assert.equal(by("diff-r0").model, "p/small");
   assert.equal(by("implement").skill, "build-skill");
   assert.equal(by("review-code-r0").skill, "code-skill");
   assert.equal(by("review-ux-r0").skill, undefined);
@@ -94,7 +96,7 @@ test("blocker findings trigger revise and a re-review by that lens only", async 
     return happy()(key);
   });
   assert.equal(round, 1);
-  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "revise-r1", "review-code-r1", "pr"]);
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "revise-r1", "diff-r1", "review-code-r1", "pr"]);
   assert.match(task("revise-r1"), /- test: npm test/);
 });
 
@@ -114,7 +116,7 @@ test("the script refuses to run without config or with a lens it has no text for
 
 test("code review runs whatever lenses a hand launch names", async () => {
   const { calls } = await simulate({ ...args, lenses: ["ux"] }, happy());
-  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "review-code-r0", "review-ux-r0", "pr"]);
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "pr"]);
   const { calls: dup } = await simulate({ ...args, lenses: ["code", "ux", "code"] }, happy());
   assert.equal(dup.filter((c) => c.key === "review-code-r0").length, 1);
 });
@@ -122,7 +124,7 @@ test("code review runs whatever lenses a hand launch names", async () => {
 test("every writing stage checks the worktree's HEAD before working, with the path single-quoted", async () => {
   const { calls } = await simulate({ ...args, worktree: "/tmp/my repo/issue-2" }, happy());
   const guarded = calls.filter((c) => !c.key.startsWith("flag-") && !c.key.startsWith("review-"));
-  assert.deepEqual(guarded.map((c) => c.key), ["spec", "implement", "pr"]);
+  assert.deepEqual(guarded.map((c) => c.key), ["spec", "implement", "diff-r0", "pr"]);
   for (const c of guarded) {
     assert.match(c.task, /BEFORE ANYTHING ELSE run: git -C '\/tmp\/my repo\/issue-2' rev-parse --abbrev-ref HEAD\nIf the output is not exactly issue-2-scaffold, change nothing and stop/, c.key);
     assert.doesNotMatch(c.task, /\/tmp\/my repo\/issue-2(?<!')[ \n]/, c.key);
@@ -151,6 +153,7 @@ test("only the writing stages run the worktree check; reviewers have no shell", 
     const writes = !c.key.startsWith("review-");
     assert.equal(/rev-parse --abbrev-ref HEAD/.test(c.task), writes, c.key);
   }
+  assert.ok(calls.some((c) => c.key === "diff-r0"));
 });
 
 test("a PR stage that opens no PR, or fails, flags a human and stops", async () => {
@@ -162,4 +165,75 @@ test("a PR stage that opens no PR, or fails, flags a human and stops", async () 
   }
   const { calls } = await simulate(args, happy({ pr: { ok: false, error: "boom" } }));
   assert.match(calls.at(-1)!.task, /Stage: pr\. boom/);
+});
+
+const dir = "/tmp/repo-worktrees/issue-2/.pi/factory-review";
+const blockerOnCode = (key: string): Answer =>
+  key === "review-code-r0"
+    ? { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" }] } }
+    : key === "revise-r1"
+      ? { structuredOutput: { status: "done", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }
+      : happy()(key);
+
+test("before each review round a Haiku worker writes an ignored diff file", async () => {
+  const { calls, task } = await simulate(args, happy());
+  const diff = calls.find((c) => c.key === "diff-r0")!;
+  assert.equal(diff.agent, "worker");
+  assert.equal(diff.model, "claude-bridge/claude-haiku-5-5");
+  assert.ok(task("diff-r0").includes(`printf '*\\n' > '${dir}/.gitignore'\n`));
+  assert.ok(task("diff-r0").includes(`git -C '/tmp/repo-worktrees/issue-2' diff --no-color --no-ext-diff --stat=200 origin/main...HEAD > '${dir}/r0.diff'\n`));
+  assert.ok(task("diff-r0").includes(`git -C '/tmp/repo-worktrees/issue-2' diff --no-color --no-ext-diff origin/main...HEAD >> '${dir}/r0.diff'\n`));
+  assert.ok(task("diff-r0").includes(`mkdir -p '${dir}'\n`));
+  assert.ok(task("diff-r0").includes(`wc -l < '${dir}/r0.diff'\n`));
+  assert.ok(task("diff-r0").includes("git -C '/tmp/repo-worktrees/issue-2' diff --name-only origin/main...HEAD\n"));
+  const at = (k: string) => calls.findIndex((c) => c.key === k);
+  assert.ok(at("diff-r0") < at("review-code-r0") && at("diff-r0") < at("review-ux-r0"));
+});
+
+test("every reviewer reads the round's diff and cites hunks", async () => {
+  const { task } = await simulate(args, happy());
+  for (const key of ["review-code-r0", "review-ux-r0"]) {
+    assert.ok(task(key).includes(`${dir}/r0.diff`), key);
+    assert.ok(task(key).includes("(120 lines)"), key);
+    assert.ok(task(key).includes("Changed files: a.ts, b.ts."), key);
+    assert.match(task(key), /continuing with offset/, key);
+    assert.match(task(key), /"path:line"/, key);
+    assert.doesNotMatch(task(key), /--name-only/, key);
+  }
+});
+
+test("each re-review round gets a fresh diff", async () => {
+  const { task } = await simulate(args, blockerOnCode);
+  assert.ok(task("diff-r1").includes("r1.diff"));
+  assert.ok(task("review-code-r1").includes(`${dir}/r1.diff`));
+  assert.ok(!task("review-code-r1").includes("r0.diff"));
+});
+
+test("a failed diff step degrades the review and does not stop the run", async () => {
+  const cases: [Answer, string][] = [
+    [{ ok: false, error: "boom" }, "unavailable: boom"],
+    [{ structuredOutput: { status: "blocked", summary: "wrong branch" } }, "unavailable: wrong branch"],
+  ];
+  for (const [diff, record] of cases) {
+    const { result, calls, task } = await simulate(args, happy({ "diff-r0": diff }));
+    assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "pr"]);
+    assert.match(task("review-code-r0"), /could not be prepared/);
+    assert.ok(task("review-code-r0").includes("the changed files: a.ts"));
+    assert.ok(!task("review-code-r0").includes(".pi/factory-review"));
+    assert.equal(result.rounds[0].diff, record);
+    assert.ok(task("pr").includes(record));
+  }
+});
+
+test("the factory record shows the diff each round read", async () => {
+  const { result, task } = await simulate(args, happy());
+  assert.equal(result.rounds[0].diff, ".pi/factory-review/r0.diff (120 lines, 2 files)");
+  assert.ok(task("pr").includes("the diff the"));
+  assert.ok(task("pr").includes('"diff":".pi/factory-review/r0.diff (120 lines, 2 files)"'));
+});
+
+test("on --start-at review the reviewers get git's file list", async () => {
+  const { calls, task } = await simulate({ ...args, startAt: "review" }, happy());
+  assert.deepEqual(calls.map((c) => c.key), ["diff-r0", "review-code-r0", "review-ux-r0", "pr"]);
+  assert.ok(task("review-code-r0").includes("Changed files: a.ts, b.ts."));
 });
