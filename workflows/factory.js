@@ -1,9 +1,14 @@
 // Factory: spec (Opus) → implement (Sonnet) → review lenses (Opus, parallel)
 // → revise ≤ maxRounds (Sonnet) → PR (Sonnet). See docs/factory.md.
 //
-// args: { repo, issue, slug, worktree, branch, lenses?: string[], maxRounds?: number, seam?: boolean,
-//         startAt?: "spec" | "implement" | "review", parent?: number }
+// args: { repo, issue, slug, worktree, branch, config, lenses?: string[], maxRounds?: number,
+//         seam?: boolean, startAt?: "spec" | "implement" | "review", parent?: number,
+//         engine?: { commit, dirty? } }
 // (validated before launch by src/resource.ts when run as the named resource "pi-factory"; keep both in step)
+// config: the engine part of the repo's .pi/factory.json (src/config.ts): design sources, lens texts,
+// skills, checks and stage guidance. Everything project-specific comes from there; this script
+// holds none of it. The /factory command builds all of these args.
+// engine: the pi-factory commit that launched the run, recorded in the PR for provenance.
 // seam: the change is a shared foundation later issues build on (label `seam`); reviewers
 // then rate inherited defects by blast radius.
 // startAt: skip earlier stages. "implement" needs the spec already committed on the branch;
@@ -12,17 +17,22 @@
 // The caller creates `worktree` on `branch` before launching; every stage runs there.
 // Whenever the run stops for a person, the issue or PR gets the `needs:human` label.
 
-const OPUS = "claude-bridge/claude-opus-5-5";
-const SONNET = "claude-bridge/claude-sonnet-5-5";
-const HAIKU = "claude-bridge/claude-haiku-5-5";
-const SPEC_URL =
-  "https://raw.githubusercontent.com/seandavi/bioc-infrastructure/spec/mcp/proposal-mcp.qmd";
+const config = args.config;
+if (!config) throw new Error("args.config is required: launch with /factory, or pass the engine part of .pi/factory.json");
+const models = config.models || {};
+const OPUS = models.strong || "claude-bridge/claude-opus-5-5";
+const SONNET = models.fast || "claude-bridge/claude-sonnet-5-5";
+const HAIKU = models.small || "claude-bridge/claude-haiku-5-5";
 
 const repo = args.repo;
 const issue = args.issue;
 const cwd = args.worktree;
 const branch = args.branch;
-const lenses = args.lenses && args.lenses.length ? args.lenses : ["code"];
+// `code` always runs, whatever the caller names; the others are added to it.
+const lenses = Array.from(new Set(["code"].concat(args.lenses || [])));
+const LENS = config.lenses;
+const unknownLenses = lenses.filter((l) => !LENS[l]);
+if (unknownLenses.length) throw new Error(`no lens text in config for: ${unknownLenses.join(", ")}`);
 const maxRounds = args.maxRounds || 2;
 const seam = !!args.seam;
 const STAGES = ["spec", "implement", "review"];
@@ -32,54 +42,56 @@ const stageRuns = (stage) => STAGES.indexOf(startAt) <= STAGES.indexOf(stage);
 const parent = args.parent || null;
 const NEEDS_HUMAN = "needs:human";
 const SEAM_NOTE = seam
-  ? `\nThis change is a SHARED SEAM: later issues build adapters and modules on it. Rate by blast
+  ? `\nThis change is a SHARED SEAM: later issues build on it${config.seamNote ? ` (${config.seamNote})` : ""}. Rate by blast
 radius, not by current reach: a defect every later caller would inherit or copy (a guard that can
 be bypassed, a missing validation, a leaky contract) is at least "major", even if nothing reaches
 it yet.`
   : "";
-const specPath = `docs/specs/${issue}-${args.slug}.md`;
+const specPath = `${config.specDir || "docs/specs"}/${issue}-${args.slug}.md`;
+const CHECKS = config.checks;
+const checkList = CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n");
+const engineNote = args.engine && args.engine.commit
+  ? `seandavi/pi-factory@${args.engine.commit}${args.engine.dirty ? " (with uncommitted changes)" : ""}`
+  : "unknown (launched without /factory)";
+// Single-quoted for the shell, so nothing in the configured identity is expanded.
+const shellQuote = (text) => `'${String(text).replace(/'/g, "'\\''")}'`;
+const commitCmd = config.commitAuthor
+  ? `git -c ${shellQuote(`user.name=${config.commitAuthor.name}`)} -c ${shellQuote(`user.email=${config.commitAuthor.email}`)} commit`
+  : "git commit";
 
-const COMMON = `
-Repository: ${repo}, issue #${issue}. Working directory (a git worktree on branch ${branch}): ${cwd}
-Read AGENTS.md in that directory first and follow it. The design spec for the whole project is
-${SPEC_URL} (fetch it with curl if you need it).
-Work only inside ${cwd}. Never touch main, never merge, never force-push, never git stash.
-Commit with: git -c user.name="Sean Davis" -c user.email=seandavi@gmail.com commit
+const cwdQ = shellQuote(cwd);
+const CONTEXT = `
+Repository: ${repo}, issue #${issue}. Working directory (a git worktree on branch ${branch}): ${cwdQ}
+Read AGENTS.md in that directory first and follow it. ${config.design}
+Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never git stash.
+Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
+// The validator pins the names but cannot look at the disk: every stage that writes (spec,
+// implement, revise, PR; all on the worker agent, which has bash) checks that the directory really
+// is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
+// they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
+const COMMON = `${CONTEXT}
+BEFORE ANYTHING ELSE run: git -C ${cwdQ} rev-parse --abbrev-ref HEAD
+If the output is not exactly ${branch}, change nothing and stop: a stage with a status reports
+"blocked" and names the mismatch in summary or blocking_questions; the PR stage reports pr_url as
+an empty string.`;
 
-// Project skills (.agents/skills) handed to stages that write or review Worker code. The built-in
-// worker/reviewer agents set inheritSkills: false, so a child sees a skill only when named here.
-// A missing skill is a warning, not a failure.
-const BUILD_SKILLS = "workers-best-practices";
-const LENS_SKILLS = { code: "workers-best-practices", security: "workers-best-practices" };
-
-const LENS = {
-  code: `CODE review. Correctness against the issue spec and its acceptance criteria; tests that
-would actually catch a regression (fixtures, no network); the one-capability-two-transports rule
-(no logic in transports/); deep modules with clear seams; type safety; dead code; dependency choices
-against AGENTS.md. The spec and the code must agree: rules, interfaces and example snippets in the
-spec match what the code does, because later issues copy the spec (a stale spec is "major").`,
-  ux: `AGENT + DEVELOPER UX review. Tool names; descriptions that say what the tool answers and
-when to use another tool instead; input/output schema clarity and defaults; error messages an agent
-can act on; result size (≤ ~8 KB text) and pagination; provenance on every result; REST paths,
-query params and OpenAPI quality; README/connection instructions for a first-time user.`,
-  security: `SECURITY review. SSRF (no capability fetches a caller-supplied URL or host); input
-validation and bounds; secret handling (code, fixtures, logs, CI); fork-PR CI safety (no secrets on
-pull_request, no pull_request_target); Host/Origin allowlist; rate limiting; that nothing
-non-public can be returned.`,
-};
+// Skills handed to stages (config.skills). The built-in worker/reviewer agents set
+// inheritSkills: false, so a child sees a skill only when named here. A missing skill is a warning.
+const BUILD_SKILLS = (config.skills && config.skills.build) || undefined;
+const LENS_SKILLS = (config.skills && config.skills.lenses) || {};
+const withSkill = (skill) => (skill ? { skill } : {});
 
 const statusSchema = (extra) => ({
   type: "object",
   required: ["status"],
   properties: Object.assign({ status: { type: "string", enum: ["done", "blocked"] } }, extra),
 });
+// One result per configured check, by name: "n/a" when the change cannot affect it.
 const checksSchema = {
   type: "object",
-  properties: {
-    tests: { type: "string", enum: ["pass", "fail", "n/a"] },
-    typecheck: { type: "string", enum: ["pass", "fail", "n/a"] },
-  },
+  required: CHECKS.map((c) => c.name),
+  properties: Object.fromEntries(CHECKS.map((c) => [c.name, { type: "string", enum: ["pass", "fail", "n/a"] }])),
 };
 const reviewSchema = {
   type: "object",
@@ -110,9 +122,11 @@ function flagHuman(key, why) {
     agent: "worker",
     model: HAIKU,
     cwd,
-    task: `${COMMON}
+    task: `${CONTEXT}
 
-Do not change any file. Run:
+Do not change any file. Make sure the label exists, then add it (the first command does nothing
+if the repository already has the label):
+  gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
   gh issue edit ${issue} -R ${repo} --add-label ${NEEDS_HUMAN}
 then post this as a comment on the issue with gh issue comment ${issue} -R ${repo} --body-file -:
 
@@ -142,22 +156,21 @@ if (stageRuns("spec")) {
     task: `${COMMON}
 
   You are the SPEC stage. Do not write any code.
-  1. Read the issue: gh issue view ${issue} -R ${repo} --comments. Read the project spec and AGENTS.md.
-  2. Write ${specPath}: Goal; Non-goals; Design (files to add/change, exported interfaces, zod
-     schemas for every capability's input and output, MCP tool and REST route for each, upstream
-     calls with example URLs and fixture files to record); Acceptance criteria as a testable
-     checklist; Test plan; Risks. Be concrete enough that an implementer never has to choose a
-     library or an interface. Verify package APIs you rely on (npm view, or read the package's docs)
-     rather than guessing.
+  1. Read the issue: gh issue view ${issue} -R ${repo} --comments. Read AGENTS.md and the design
+     sources above.
+  2. Write ${specPath}: Goal; Non-goals; Design (${config.spec.design}); Acceptance criteria as a
+     testable checklist; Test plan; Risks. Be concrete enough that an implementer never has to
+     choose a library or an interface. Verify package APIs you rely on (the package manager's
+     metadata or the package's docs) rather than guessing.
   3. Commit only that file ("Spec for #${issue}").
   Set status "blocked" only if a question has two reasonable answers with materially different
-  outcomes that the issue and project spec do not settle; list them in blocking_questions.`,
+  outcomes that the issue and the design sources do not settle; list them in blocking_questions.`,
   });
   specOut = spec.structuredOutput || {};
   if (!spec.ok || specOut.status !== "ready") {
     const questions = (specOut.blocking_questions || []).map((q) => `- ${q}`).join("\n");
-    await flagHuman("flag-spec", `Stage: spec. ${questions ? `Blocking questions:\n${questions}` : `Error: ${spec.error || "no structured output"}`}`);
-    return { stage: "spec", stopped: true, spec: specOut, error: spec.error || null };
+    const flag = await flagHuman("flag-spec", `Stage: spec. ${questions ? `Blocking questions:\n${questions}` : `Error: ${spec.error || "no structured output"}`}`);
+    return { stage: "spec", stopped: true, flagged: flag.ok, spec: specOut, error: spec.error || null };
   }
 }
 
@@ -168,7 +181,7 @@ if (stageRuns("implement")) {
     label: `Implement issue #${issue}`,
     agent: "worker",
     model: SONNET,
-    skill: BUILD_SKILLS,
+    ...withSkill(BUILD_SKILLS),
     cwd,
     outputSchema: statusSchema({
       summary: { type: "string" },
@@ -178,16 +191,18 @@ if (stageRuns("implement")) {
     task: `${COMMON}
 
   You are the IMPLEMENT stage. Implement exactly ${specPath}; it is the contract. Do not redesign.
-  Work in the foreground (never leave background processes running). Record fixtures by fetching
-  the upstream URLs once with curl into test/fixtures/; tests must not use the network.
-  Run the install, typecheck and test commands and fix failures. Commit in small, well-described
-  commits. Report changed_files (paths relative to the repo root) and check results.
+  Work in the foreground (never leave background processes running).
+  ${config.implement}
+  Run these checks from ${cwdQ} and fix failures:
+${checkList}
+  Commit in small, well-described commits. Report changed_files (paths relative to the repo root)
+  and each check's result by name ("n/a" only if the change cannot affect it).
   Set status "blocked" if the spec is wrong or impossible; explain in summary.`,
   });
   implOut = impl.structuredOutput || {};
   if (!impl.ok || implOut.status !== "done") {
-    await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
-    return { stage: "implement", stopped: true, spec: specOut, implement: implOut, error: impl.error || null };
+    const flag = await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
+    return { stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || null };
   }
 }
 
@@ -209,7 +224,7 @@ function reviewTask(lens, files, round, prior) {
   const scope = files.length
     ? `the changed files: ${files.join(", ")}`
     : `every file changed on this branch (git diff --name-only origin/main...HEAD)`;
-  return `${COMMON}
+  return `${CONTEXT}
 
 You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
 Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and ${scope}.
@@ -228,7 +243,7 @@ function reviewBatch(lensList, files, round, prior) {
     cwd,
     outputSchema: reviewSchema,
     task: reviewTask(lens, files, round, prior),
-  }, LENS_SKILLS[lens] ? { skill: LENS_SKILLS[lens] } : {})));
+  }, withSkill(LENS_SKILLS[lens]))));
 }
 function blocking(results, lensList) {
   const out = [];
@@ -265,7 +280,7 @@ while (open.length && round < maxRounds) {
     label: `Revise issue #${issue} r${round}`,
     agent: "worker",
     model: SONNET,
-    skill: BUILD_SKILLS,
+    ...withSkill(BUILD_SKILLS),
     cwd,
     outputSchema: statusSchema({
       responses: {
@@ -292,7 +307,9 @@ Fix the root cause, not the symptom: prefer the change that makes the whole clas
 over a check that catches this instance. Reviewers will judge the fix itself.
 If a fix changes an interface, a rule or an example the spec describes, update ${specPath} in the
 same commit so the spec matches the code; later issues copy it.
-Re-run typecheck and tests. Commit ("Address review round ${round} for #${issue}").
+Re-run the checks:
+${checkList}
+Commit ("Address review round ${round} for #${issue}").
 Report every finding id in responses and all files you changed.`,
   });
   const revOut = rev.structuredOutput || {};
@@ -311,7 +328,7 @@ Report every finding id in responses and all files you changed.`,
 }
 
 // ---- 5. Follow-up issue, PR -----------------------------------------------------------
-const checksFailing = checks.tests === "fail" || checks.typecheck === "fail";
+const checksFailing = Object.keys(checks).some((k) => checks[k] === "fail");
 const draft = open.length > 0 || checksFailing;
 const pr = await runs.run("pr", {
   label: `Open PR for issue #${issue}`,
@@ -343,16 +360,25 @@ You are the PR stage. Do not change code.
    - "Closes #${issue}" and a short summary from ${specPath}.
    - "Factory record": a table with one row per review round (round, lenses, blocking findings,
      what was fixed or declined, one line each) from ${JSON.stringify(history)}; then the checks
-     ${JSON.stringify(checks)}.${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
+     ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
    - "Follow-ups": one line linking the follow-up issue from step 2 (omit if none).
 4. If a PR for ${branch} already exists (gh pr view ${branch} -R ${repo}), replace its body with
    gh pr edit and keep its title${draft ? " and mark it draft (gh pr ready --undo)" : ""}. Otherwise:
    gh pr create -R ${repo} --base main --head ${branch} ${draft ? "--draft " : ""}with a title naming the change.
-   Either way, add the label: gh pr edit ${branch} -R ${repo} --add-label ${NEEDS_HUMAN}
+   Either way, make sure the label exists and add it (the first command does nothing if the
+   repository already has the label):
+   gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
+   gh pr edit ${branch} -R ${repo} --add-label ${NEEDS_HUMAN}
 5. Report the PR URL and the follow-up issue number.`,
 });
 const prOut = pr.structuredOutput || {};
+// No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
+if (!pr.ok || !prOut.pr_url) {
+  const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
+  const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
+  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, error: pr.error || null, engine: args.engine || null };
+}
 
 return {
   issue,
@@ -365,4 +391,5 @@ return {
   unresolved: open,
   followUps: followUps.length,
   followUpIssue: prOut.followup_issue || null,
+  engine: args.engine || null,
 };

@@ -12,8 +12,8 @@ privately ([SECURITY.md](SECURITY.md)).
 | Change | Lives in |
 |---|---|
 | Stages, prompts, review-lens machinery, stop rules | `workflows/factory.js` (this repo) |
-| Packaging, the `pi-factory` resource, args validation | `extensions/`, `src/` (this repo) |
-| Design sources, lens texts, skills, check commands for one project | that project's `AGENTS.md` and `.pi/factory.json` ([#3](https://github.com/seandavi/pi-factory/issues/3)) |
+| Packaging, `/factory`, the `pi-factory` resource, config schema, args validation | `extensions/`, `src/`, `schema/` (this repo) |
+| Design sources, lens texts, skills, check commands for one project | that project's `AGENTS.md` and `.pi/factory.json` (examples in `examples/`) |
 
 If a change only makes sense for one project, it belongs in that project's config. The engine
 stays project-neutral.
@@ -55,6 +55,8 @@ Labels the engine and its runs use:
    Don't `/reload` while a factory run is active; resume with `options.reuseFrom` instead.
 5. Keep things in step:
    - Args added or changed in `factory.js` → update `src/resource.ts` in the same commit.
+   - Config fields added or changed → update `src/config.ts`, run `npm run schema`, and update
+     Table 2 in `docs/factory.md` and the files in `examples/`.
    - Stages, models, lenses or stop rules changed → update `docs/factory.md` and regenerate the
      figure with `python3 docs/figures/make_figures.py` (stdlib only; commit the SVGs).
 6. Open a PR with the template. Say what you could not verify.

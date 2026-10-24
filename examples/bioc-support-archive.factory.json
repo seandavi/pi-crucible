@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/seandavi/pi-factory/main/schema/factory.schema.json",
+  "worktreeRoot": "../bioc-support-archive-worktrees",
+  "design": "The design record for the whole project is README.md plus the ADRs in docs/adr/; a change that contradicts an ADR must say so in its spec.",
+  "seamNote": "the export query, the page templates, the URL scheme, the Worker",
+  "spec": {
+    "design": "files to add/change under pipeline/, worker/ or docs/; functions and their signatures; SQL and table/column names for any data change, checked against ADR 3; generated URLs and redirects, checked against ADR 4; which `just` recipes change. The test plan uses synthetic SQLite fixtures written in the test; the real dump is private and never used in tests"
+  },
+  "implement": "Stop any wrangler dev you start. Tests build small synthetic SQLite/DuckDB fixtures; never read data/raw, the dumps or data/*.duckdb|sqlite in tests, and never commit anything under data/. Never run `just publish`. Report a check as n/a when the change cannot affect it (e.g. worker for a pipeline-only change).",
+  "checks": [
+    {
+      "name": "test",
+      "command": "just test"
+    },
+    {
+      "name": "ruff",
+      "command": "uv run ruff check pipeline"
+    },
+    {
+      "name": "worker",
+      "command": "cd worker && npm ci && npx wrangler deploy --dry-run"
+    }
+  ],
+  "lenses": {
+    "code": "CODE review. Correctness against the issue spec and its acceptance criteria; tests that would actually catch a regression (synthetic SQLite fixtures built in the test, never the private dump, no network); pipeline steps stay incremental and idempotent (ADR 5: content-hash manifest, unchanged pages are not rewritten); the Worker stays a thin URL-to-R2 mapper with no runtime database (ADR 1); dead code; dependency choices against AGENTS.md (uv, polars not pandas, stdlib figure scripts). The spec and the code must agree: a stale spec is \"major\", because later issues copy it.",
+    "ux": "READER UX review, for someone landing on an old support.bioconductor.org link. Old URLs and answer/comment anchors still resolve (ADR 4); pages are readable on mobile and in light and dark mode; accessibility (contrast, headings, alt text, keyboard focus, landmarks); search finds what a reader would type (Pagefind, ADR 6); code blocks, images and long threads render well; clear \"this is an archive\" context and where to ask new questions; README/CONTRIBUTING for a first-time contributor.",
+    "privacy": "PRIVACY + SECURITY review. Nothing outside the public subset (ADR 3) can reach the public SQLite file, the build, R2 or a log: no emails, password hashes, sessions, tokens, private messages, per-person votes, profile bio/website/location, spam or deleted posts, or posts under removed threads/parents. Check the export query itself, not just its tests (spam=0 means SPAM, status=3 is CLOSED not deleted). Rendering escapes user HTML (no stored XSS from 25 years of posts); media fetches stay on support.bioconductor.org paths; the Worker cannot be made to redirect off-site or read keys outside the build; no secrets or dump contents in code, fixtures, commits or CI logs."
+  }
+}

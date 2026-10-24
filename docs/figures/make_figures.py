@@ -106,15 +106,15 @@ def factory_flow(theme: dict[str, str]) -> str:
     top, h = 110, 175
     mid = top + h / 2
 
-    f.box(30, top, 240, h, "Launch", ["subagent({ workflow:", '  "pi-factory" })', "args checked first",
-                                      "worktree on branch"], "MUTED")
+    f.box(30, top, 240, h, "/factory <issue>", [".pi/factory.json", "worktree + branch", "lenses from labels",
+                                                "args checked first"], "MUTED")
     f.box(330, top, 240, h, "Spec · Opus", ["docs/specs/", "  <n>-<slug>.md", "one commit"], "VIOLET")
-    f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "tests, typecheck"],
+    f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "configured checks"],
           "BLUE")
 
     f.group(930, 80, 280, 235, "review · parallel", "VIOLET")
     for i, (lens, when) in enumerate([("code", "always"), ("ux", "review:ux"),
-                                      ("security", "review:security")]):
+                                      ("<lens>", "review:<lens>")]):
         f.tag_box(950, 100 + i * 72, 240, 58, lens, when)
 
     f.box(1280, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
@@ -139,7 +139,7 @@ def factory_flow(theme: dict[str, str]) -> str:
     f.arrow([(750, top + h + 3), (750, 425)], "CORAL", "blocked", (750, 357), dashed=True)
 
     # startAt entry points: resume past earlier stages.
-    for x, s in [(750, 'startAt: "implement"'), (1150, 'startAt: "review"')]:
+    for x, s in [(750, "--start-at implement"), (1150, "--start-at review")]:
         w = len(s) * 14 * 0.62 + 20
         f.pill(x - w / 2, 18, s, "GREEN")
         f.arrow([(x, 46), (x, 76 if x > 900 else 106)], "GREEN", width=2)
@@ -163,7 +163,7 @@ def factory_flow(theme: dict[str, str]) -> str:
     f.arrow([(x, ly + 1), (x + 50, ly + 1)], "CORAL", dashed=True)
     f.add(f.text(x + 60, ly + 7, "stop", 16))
     x += 120
-    w = f.pill(x, ly - 12, "startAt", "GREEN")
+    w = f.pill(x, ly - 12, "--start-at", "GREEN")
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
     return f.svg(1820, 670, "The factory workflow: launch, spec (Opus), implement (Sonnet), parallel "

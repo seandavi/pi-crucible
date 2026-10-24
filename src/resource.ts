@@ -5,6 +5,8 @@
 // not do I/O, so the extension reads the script once per session and hands it in here.
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { engineConfigErrors } from "./config.ts";
 
 export const RESOURCE_NAME = "pi-factory";
 export const RESOURCE_VERSION = 1;
@@ -20,6 +22,8 @@ type Args = Readonly<Record<string, unknown>>;
 type Check = (value: unknown) => string | null;
 
 const STAGES = ["spec", "implement", "review"];
+// The worktree path is written into commands the stages run; spaces are fine (it is single-quoted there).
+const UNSAFE_PATH_CHARS = /[\x00-\x1f\x7f`$\\"';|&<>(){}*?!~]/;
 
 const isPositiveInt = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 const str: Check = (v) => (typeof v === "string" && v.trim() ? null : "must be a non-empty string");
@@ -57,6 +61,25 @@ const FIELDS: Record<string, { required: boolean; check: Check }> = {
     check: (v) => (typeof v === "string" && STAGES.includes(v) ? null : `must be one of ${STAGES.join(", ")}`),
   },
   parent: { required: false, check: (v) => (isPositiveInt(v) ? null : "must be a positive integer") },
+  config: {
+    required: true,
+    check: (v) => {
+      const errors = engineConfigErrors(v);
+      return errors.length ? `is not a valid engine config (${errors.join("; ")})` : null;
+    },
+  },
+  engine: {
+    required: false,
+    check: (v) => {
+      const e = v as { commit?: unknown; dirty?: unknown };
+      const ok =
+        typeof v === "object" && v !== null && !Array.isArray(v) &&
+        Object.keys(v).every((k) => k === "commit" || k === "dirty") &&
+        typeof e.commit === "string" && /^[0-9a-f]{7,40}$/.test(e.commit) &&
+        (e.dirty === undefined || typeof e.dirty === "boolean");
+      return ok ? null : "must be { commit: <git sha>, dirty?: boolean }";
+    },
+  },
 };
 
 /** Every problem with `args`, as messages an agent can act on; empty when the args are valid. */
@@ -72,6 +95,23 @@ export function argErrors(args: Args): string[] {
     }
     const problem = check(args[key]);
     if (problem) errors.push(`arg "${key}" ${problem}`);
+  }
+  if (!errors.length) {
+    const defined = (args.config as { lenses: Record<string, string> }).lenses;
+    const lenses = ["code", ...((args.lenses as string[] | undefined) ?? [])];
+    const missing = lenses.filter((l) => !defined[l]);
+    if (missing.length) errors.push(`no lens text in config.lenses for: ${missing.join(", ")}`);
+    // This validator is the only guard for hand launches. Pin the names the launcher derives, so
+    // stages cannot be pointed at main (or a path outside the issue's worktree) and the branch
+    // is safe to put in shell commands.
+    const { issue, slug, branch, worktree } = args as { issue: number; slug: string; branch: string; worktree: string };
+    if (branch !== `issue-${issue}-${slug}`) errors.push(`arg "branch" must be "issue-${issue}-${slug}" (issue-<issue>-<slug>)`);
+    if (path.posix.normalize(worktree) !== worktree || !worktree.endsWith(`/issue-${issue}`)) {
+      errors.push(`arg "worktree" must be a normalized absolute path ending in /issue-${issue}`);
+    }
+    if (UNSAFE_PATH_CHARS.test(worktree)) {
+      errors.push('arg "worktree" may not contain control characters or shell metacharacters (` $ \\ " \' ; | & < > ( ) { } * ? ! ~)');
+    }
   }
   return errors;
 }

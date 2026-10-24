@@ -11,29 +11,23 @@ matters and the fast model where volume does. The script is
 
 | Stage | Model | Agent | Writes | Output |
 |---|---|---|---|---|
-| Spec | Opus | `worker` | `docs/specs/<issue>-<slug>.md`, one commit | `{status, spec_path, blocking_questions}` |
-| Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}` |
+| Spec | Opus | `worker` | `<specDir>/<issue>-<slug>.md` (default `docs/specs`), one commit | `{status, spec_path, blocking_questions}` |
+| Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}`: one result per configured check |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
 | Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, responses[], checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
-**Review lenses** (chosen per issue from labels):
+**Review lenses** are defined per repository in `.pi/factory.json`: a name and the text the
+reviewer is told to check. `code` is required and runs on every issue, however the run is launched (the script adds it to any
+`lenses` it is given; `defaultLenses` may add more, but must include it); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
+example, defines `code`, `ux` (agent and developer experience of its MCP tools) and `security`;
+bioc-support-archive defines `code`, `ux` (a reader on an old link) and `privacy`. See
+[`examples/`](../examples).
 
-- `code` (always): correctness against the spec, tests that would catch a regression, the
-  one-capability-two-transports rule, Ousterhout-style deep modules with clear seams, no
-  network in tests. The spec and the code must agree; a stale spec is `major`, because later
-  issues copy it.
-- `ux` (label `review:ux`): the agent and developer experience. Tool names, descriptions that
-  say when *not* to use the tool, input/output schemas, error messages an agent can act on,
-  result size, provenance; REST paths and OpenAPI; README and connection instructions.
-- `security` (label `review:security`): SSRF (no tool fetches a caller-supplied URL), input
-  validation, secret handling, fork-PR CI safety, rate limiting, nothing non-public returned.
-
-**Skills:** the built-in `worker` and `reviewer` agents do not inherit skills, so the script names
-them per stage. Implement, revise and the `code`/`security` lenses get the project skill
-`workers-best-practices` (`.agents/skills/`, pinned in `skills-lock.json`). It is a trial: keep it
-if reviews cite it for real findings.
+**Skills:** the built-in `worker` and `reviewer` agents do not inherit skills, so the config names
+them per stage (`skills.build` for implement and revise, `skills.lenses.<lens>` per reviewer). A
+missing skill is a warning, not a failure.
 
 **Seams** (label `seam`, arg `seam: true`): for shared foundations that later issues build on, the
 reviewers are told to rate inherited defects by blast radius, so a bypassable guard is `major`
@@ -52,16 +46,48 @@ findings remain after round two, the PR opens as a **draft** listing them.
 (a sub-issue of `parent` when given), and the PR links it.
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
-implementation reporting `blocked` stops before review. Both label the issue `needs:human` and
-comment why. Every PR the factory opens is labelled `needs:human` too; remove the label when you
+implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
+the run at the end. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
+comment why; the run's result says whether the flag succeeded (`flagged`). Every PR the factory opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
-**Resuming:** `startAt: "implement"` skips the spec stage (the spec must already be on the branch);
-`startAt: "review"` re-reviews an existing branch, e.g. after hand edits, and replaces the body of
+**Resuming:** `--start-at implement` skips the spec stage (the spec must already be on the branch);
+`--start-at review` re-reviews an existing branch, e.g. after hand edits, and replaces the body of
 its PR if one exists. Use it instead of fixing review findings by hand outside the factory, so the
 record stays in the PR.
 
+**Provenance:** `/factory` passes the engine's commit (and whether its checkout had local changes),
+and the PR's factory record ends with `Engine: seandavi/pi-factory@<sha>`.
+
 **Never automated:** merging. A human merges, from the main session.
+
+## Configuring a repository
+
+Each repository that uses the engine keeps two things: `AGENTS.md`, which every stage reads first,
+and `.pi/factory.json`. The engine holds no project text; everything below reaches the workflow as
+`args.config`. The schema is [`schema/factory.schema.json`](../schema/factory.schema.json)
+(generated from [`src/config.ts`](../src/config.ts)); point `$schema` at it for editor help.
+
+| Field | Used by | Meaning |
+|---|---|---|
+| `design` | every stage | Where the design lives and how to treat it. |
+| `spec.design` | spec | What the spec's Design section must pin down for this project. |
+| `implement` | implement | Project rules: fixtures, data tests must never read, setup steps. |
+| `checks` | implement, revise, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. |
+| `lenses` | review | `{name: text}`; `code` is required. |
+| `defaultLenses` | `/factory` | Lenses every run gets; must include `code` (default `["code"]`). |
+| `seamNote` | review | What later issues build on, for the `seam` reviewer note. |
+| `skills` | implement, revise, review | `{build, lenses: {name: skill}}`. |
+| `specDir` | spec | Default `docs/specs`. |
+| `worktreeRoot` | `/factory` | Default `../<repo>-worktrees`, relative to the main checkout. |
+| `parent` | PR | Tracking issue; the follow-up issue becomes its sub-issue. |
+| `repo` | `/factory` | `owner/name`, when the `origin` remote does not say. |
+| `commitAuthor` | every writing stage | `{name, email}`; default is the worktree's git config. The name may not contain control characters, backticks, `$` or `\`; the email is `local@domain` in plain characters. Both are single-quoted in the commit command. |
+| `models` | every stage | `{strong, fast, small}` model ids; defaults are the claude-bridge Opus, Sonnet and Haiku 5.5. |
+
+**Table 2.** `.pi/factory.json` fields. Everything except `defaultLenses`, `worktreeRoot`, `parent`,
+`repo` and `$schema` is sent to the workflow, and pi-subagents caps workflow args at 16 KiB, so
+`/factory` refuses a config whose lens texts push the args past that.
 
 ## Installing
 
@@ -99,27 +125,39 @@ Checks: `npm test` (args validation and a registration round trip through pi-sub
 
 ## Running it
 
-Prepare an isolated worktree for the issue (the workflow sandbox has no shell), then launch:
+From pi, anywhere inside the repository (its main checkout or any worktree):
 
-```sh
-git -C ~/Documents/git/bioc-mcp fetch origin
-git -C ~/Documents/git/bioc-mcp worktree add -b issue-2-scaffold \
-  ~/Documents/git/bioc-mcp-worktrees/issue-2 origin/main
+```text
+/factory 12                       # spec → implement → review → revise → PR
+/factory 12 --dry-run             # show the worktree, branch and args; change nothing
+/factory 12 --start-at review     # re-review the existing branch, update its PR
+/factory 12 --lens security       # add a lens the issue's labels do not ask for
 ```
 
+`/factory` reads `.pi/factory.json` from the main checkout and validates it; reads the issue (it
+must be open) for its title and labels; picks lenses from `defaultLenses`, `review:<lens>` labels
+and `--lens`, and `seam` from the label. It then creates the worktree
+`<worktreeRoot>/issue-<n>` on branch `issue-<n>-<slug>` from `origin/main` (or reuses it, or checks
+out an existing branch, which `--start-at` requires) and launches the `pi-factory` workflow
+asynchronously through pi-subagents. Follow the run with `/subagents-fleet`.
+
+The slug comes from the issue's title only for a new branch. If the issue already has a branch
+(the worktree's current one, else the one `issue-<n>-*` branch locally or on origin), that branch and its
+slug are used, so retitling an issue or making the branch by hand does not break `--start-at`; several
+such branches are an error that lists them. The repository should have the `needs:human` label (`/factory` stops early with the `gh label create`
+command if it is missing; the stages also create it when they flag a stop, so hand launches are covered) and should have `seam` and
+`review:<lens>` for the lenses it defines (a warning if not).
+
+Launching by hand still works, for scripts or other agents: pass the same args `/factory --dry-run`
+prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
+`issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
+metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,
+revise, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
+branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
+read-only and have no shell, so they skip the check.
+
 ```js
-subagent({
-  workflow: "pi-factory",
-  async: true,              // required for claude-bridge children on the Mac
-  cwd: "~/Documents/git/bioc-mcp",
-  args: {
-    repo: "seandavi/bioc-mcp", issue: 2, slug: "scaffold",
-    worktree: "/Users/<you>/Documents/git/bioc-mcp-worktrees/issue-2",
-    branch: "issue-2-scaffold", lenses: ["code", "ux", "security"], seam: true,
-    parent: 1               // optional: tracking issue for the follow-up issue
-    // startAt: "review"    // optional: re-review an existing branch
-  }
-})
+subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })
 ```
 
 ## What to watch while it is an experiment
