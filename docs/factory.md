@@ -13,6 +13,7 @@ matters and the fast model where volume does. The script is
 |---|---|---|---|---|
 | Spec | Opus | `worker` | `<specDir>/<issue>-<slug>.md` (default `docs/specs`), one commit | `{status, spec_path, blocking_questions}` |
 | Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}`: one result per configured check |
+| Diff | Haiku | `worker`, before each review round | `.pi/factory-review/r<round>.diff` in the worktree, ignored by git | `{status, summary, changed_files, diff_lines}` |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
 | Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, responses[], checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
@@ -34,6 +35,16 @@ reviewers are told to rate inherited defects by blast radius, so a bypassable gu
 even when nothing calls it yet. Added after #2, where four such findings came back as `minor`.
 
 **Finding ids** are `<lens>-r<round>-<n>`, unique across rounds.
+
+**The diff:** reviewers have no shell, so before each review round (round 0 and every
+re-review) a Haiku worker writes `git diff origin/main...HEAD`, its `--stat` summary first, to
+`.pi/factory-review/r<round>.diff` in the worktree. A `.gitignore` containing `*` in that
+directory keeps it out of git without touching the repository's own ignore files. Every reviewer
+gets the file's path and git's list of changed files, reads the whole diff with its read tool, and
+gives finding locations as `path:line` from the diff's hunks. If the diff step fails (a wrong
+branch, a git error), the round is reviewed from the changed-file list instead, and the factory
+record says the diff was unavailable; the run does not stop. Added after bioc-mcp, where
+reviewers without git reviewed from the file list alone (#4).
 
 **Revise rounds:** at most two. Only `blocker` and `major` findings trigger a round, and only the
 lenses that asked for changes review again. Revise fixes root causes and updates the spec when a
@@ -152,9 +163,9 @@ Launching by hand still works, for scripts or other agents: pass the same args `
 prints. The validator holds hand launches to the names `/factory` derives: `branch` must be
 `issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
 metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,
-revise, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
+diff, revise, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
 branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
-read-only and have no shell, so they skip the check.
+read-only and have no shell, so they skip the check and read the diff the diff stage wrote.
 
 ```js
 subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })
@@ -164,6 +175,8 @@ subagent({ workflow: "pi-factory", async: true, cwd: "<repo>", args: { repo, iss
 
 - Do the reviews find real problems, or restate the spec? (Count findings that led to a change.)
 - Does round two ever happen, and does it converge?
+- Do findings cite the diff (`path:line` locations in changed hunks)? How often is a round's
+  diff unavailable?
 - Time and tokens per stage, from the run receipts.
 - Severity calibration: how many `minor` findings had to be fixed before merge anyway? (#2: five,
   all in the upstream seam; the `seam` note and v2's fix-judging are the response.)
