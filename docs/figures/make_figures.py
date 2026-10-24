@@ -112,10 +112,11 @@ def factory_flow(theme: dict[str, str]) -> str:
     f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "configured checks"],
           "BLUE")
 
-    f.group(930, 80, 280, 235, "review · parallel", "VIOLET")
+    f.group(930, 80, 280, 286, "review · parallel", "VIOLET")
+    f.tag_box(950, 100, 240, 46, "diff · Haiku", "r<n>.diff", "CORAL")
     for i, (lens, when) in enumerate([("code", "always"), ("ux", "review:ux"),
                                       ("<lens>", "review:<lens>")]):
-        f.tag_box(950, 100 + i * 72, 240, 58, lens, when)
+        f.tag_box(950, 160 + i * 66, 240, 54, lens, when)
 
     f.box(1280, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
                                              "label needs:human"], "BLUE")
@@ -128,15 +129,15 @@ def factory_flow(theme: dict[str, str]) -> str:
     for x0, x1 in [(270, 325), (570, 625), (870, 925), (1210, 1275), (1520, 1575)]:
         f.arrow([(x0, mid), (x1, mid)])
 
-    f.box(950, 430, 240, 140, "Revise · Sonnet", ["fix the root cause", "keep the spec in step",
+    f.box(950, 470, 240, 140, "Revise · Sonnet", ["fix the root cause", "keep the spec in step",
                                                   "at most 2 rounds"], "BLUE")
-    f.arrow([(1010, 318), (1010, 425)], "BLUE", "blocker/\nmajor", (1010, 372))
-    f.arrow([(1130, 428), (1130, 321)], "VIOLET", "re-review:\nlenses that\nasked", (1130, 372))
+    f.arrow([(1010, 369), (1010, 465)], "BLUE", "blocker/\nmajor", (1010, 417))
+    f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked", (1130, 420))
 
-    f.box(330, 430, 540, 140, "Flag · Haiku", ["label the issue needs:human,", "comment saying why;",
+    f.box(330, 470, 540, 140, "Flag · Haiku", ["label the issue needs:human,", "comment saying why;",
                                                "the run stops"], "CORAL")
-    f.arrow([(450, top + h + 3), (450, 425)], "CORAL", "blocking\nquestions", (450, 357), dashed=True)
-    f.arrow([(750, top + h + 3), (750, 425)], "CORAL", "blocked", (750, 357), dashed=True)
+    f.arrow([(450, top + h + 3), (450, 465)], "CORAL", "blocking\nquestions", (450, 377), dashed=True)
+    f.arrow([(750, top + h + 3), (750, 465)], "CORAL", "blocked", (750, 377), dashed=True)
 
     # startAt entry points: resume past earlier stages.
     for x, s in [(750, "--start-at implement"), (1150, "--start-at review")]:
@@ -145,12 +146,12 @@ def factory_flow(theme: dict[str, str]) -> str:
         f.arrow([(x, 46), (x, 76 if x > 900 else 106)], "GREEN", width=2)
 
     # Legend
-    ly = 630
+    ly = 680
     f.add(f'<line x1="30" y1="{ly - 30}" x2="1790" y2="{ly - 30}" stroke="{theme["LINE"]}"/>\n')
     f.add(f.text(30, ly + 6, "LEGEND", 14, theme["MUTED"], 700, mono=True))
     x = 130
     for role, label in [("VIOLET", "Opus: judgment"), ("BLUE", "Sonnet: volume"),
-                        ("CORAL", "Haiku: stop for a human"), ("AMBER", "a person"),
+                        ("CORAL", "Haiku: diff, stop for a human"), ("AMBER", "a person"),
                         ("MUTED", "the caller")]:
         f.add(f'<rect x="{x}" y="{ly - 10}" width="22" height="22" rx="5" fill="{theme[role]}1f" '
               f'stroke="{theme[role]}" stroke-width="2"/>\n')
@@ -166,9 +167,10 @@ def factory_flow(theme: dict[str, str]) -> str:
     w = f.pill(x, ly - 12, "--start-at", "GREEN")
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
-    return f.svg(1820, 670, "The factory workflow: launch, spec (Opus), implement (Sonnet), parallel "
-                            "review lenses (Opus) with up to two revise rounds (Sonnet), then a PR "
-                            "(Sonnet) that a human merges. Spec or implement can stop and flag a human.")
+    return f.svg(1820, 720, "The factory workflow: launch, spec (Opus), implement (Sonnet), a diff "
+                            "(Haiku) before each round of parallel review lenses (Opus), up to two "
+                            "revise rounds (Sonnet), then a PR (Sonnet) that a human merges. Spec or "
+                            "implement can stop and flag a human.")
 
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ export const EngineConfig = Type.Object(
         {
           strong: Type.Optional(Type.String({ minLength: 1, description: "Spec and review (default claude-bridge/claude-opus-5-5)." })),
           fast: Type.Optional(Type.String({ minLength: 1, description: "Implement, revise, PR (default claude-bridge/claude-sonnet-5-5)." })),
-          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human (default claude-bridge/claude-haiku-5-5)." })),
+          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human and writing the review diff (default claude-bridge/claude-haiku-5-5)." })),
         },
         { additionalProperties: false },
       ),

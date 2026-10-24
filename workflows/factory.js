@@ -1,4 +1,4 @@
-// Factory: spec (Opus) → implement (Sonnet) → review lenses (Opus, parallel)
+// Factory: spec (Opus) → implement (Sonnet) → [diff (Haiku) → review lenses (Opus, parallel)]
 // → revise ≤ maxRounds (Sonnet) → PR (Sonnet). See docs/factory.md.
 //
 // args: { repo, issue, slug, worktree, branch, config, lenses?: string[], maxRounds?: number,
@@ -53,6 +53,10 @@ be bypassed, a missing validation, a leaky contract) is at least "major", even i
 it yet.`
   : "";
 const specPath = `${config.specDir || "docs/specs"}/${issue}-${input.slug}.md`;
+// Where the diff step writes the diff each review round reads; its .gitignore ("*") keeps the
+// directory out of git without touching the repository's own ignore files.
+const REVIEW_DIR = ".pi/factory-review";
+const diffFile = (round) => `${REVIEW_DIR}/r${round}.diff`;
 const CHECKS = config.checks;
 const checkList = CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n");
 const engineNote = input.engine && input.engine.commit
@@ -72,7 +76,7 @@ Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never
 Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
 // The validator pins the names but cannot look at the disk: every stage that writes (spec,
-// implement, revise, PR; all on the worker agent, which has bash) checks that the directory really
+// implement, diff, revise, PR; all on the worker agent, which has bash) checks that the directory really
 // is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
 // they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
 const COMMON = `${CONTEXT}
@@ -211,6 +215,56 @@ ${checkList}
   }
 }
 
+// ---- 3a. Diff (before each review batch) ---------------------------------------------
+// Reviewers have no shell, so a Haiku worker writes the branch's diff where they can read it.
+function diffRun(round) {
+  const dir = `${cwd}/${REVIEW_DIR}`;
+  const file = `${cwd}/${diffFile(round)}`;
+  const range = "origin/main...HEAD";
+  return runs.run(`diff-r${round}`, {
+    label: `Diff for issue #${issue} r${round}`,
+    agent: "worker",
+    model: HAIKU,
+    cwd,
+    outputSchema: statusSchema({
+      summary: { type: "string" },
+      changed_files: { type: "array", items: { type: "string" } },
+      diff_lines: { type: "integer" },
+    }),
+    task: `${COMMON}
+
+You are the DIFF stage for review round ${round}. Do not edit, stage or commit any file in the
+repository; you only write the review diff, which git ignores. Run these commands from ${cwdQ},
+in order, exactly as written:
+  mkdir -p ${shellQuote(dir)}
+  printf '*\\n' > ${shellQuote(`${dir}/.gitignore`)}
+  git -C ${cwdQ} diff --no-color --no-ext-diff --stat=200 ${range} > ${shellQuote(file)}
+  git -C ${cwdQ} diff --no-color --no-ext-diff ${range} >> ${shellQuote(file)}
+  wc -l < ${shellQuote(file)}
+  git -C ${cwdQ} diff --name-only ${range}
+Report status "done", diff_lines (the number wc printed) and changed_files (the paths the last
+command printed, one per line; an empty list if it printed nothing). If a command fails, stop,
+report status "blocked" and put the command and its error in summary.`,
+  });
+}
+
+// What a round's reviewers get: the diff file and git's list of changed files, or why there is
+// none. `record` is the round's entry in the PR's factory record.
+function diffFor(result, round) {
+  const out = result.structuredOutput || {};
+  if (result.ok && out.status === "done") {
+    const files = out.changed_files || [];
+    return {
+      path: `${cwd}/${diffFile(round)}`,
+      lines: out.diff_lines,
+      files,
+      record: `${diffFile(round)} (${out.diff_lines} lines, ${files.length} files)`,
+    };
+  }
+  const why = String(out.summary || result.error || "no structured output").slice(0, 200);
+  return { path: null, lines: 0, files: [], record: `unavailable: ${why}` };
+}
+
 // ---- 3. Review, 4. Revise (≤ maxRounds) -----------------------------------------------
 // Round ≥ 1 reviewers see what the previous round found and how it was answered, and judge the fix.
 function priorRound(prior) {
@@ -225,21 +279,30 @@ leaves the root cause or the class of bug in place (e.g. checking a result after
 has already happened) is a new "major" finding that names the old id. A "declined" response you
 disagree with stays open at its old severity.`;
 }
-function reviewTask(lens, files, round, prior) {
-  const scope = files.length
-    ? `the changed files: ${files.join(", ")}`
-    : `every file changed on this branch (git diff --name-only origin/main...HEAD)`;
+function reviewTask(lens, diff, files, round, prior) {
+  const source = diff.path
+    ? `The branch's changes are in ${diff.path}: the output of git diff origin/main...HEAD, a --stat
+summary followed by the full diff (${diff.lines} lines). You cannot run git, so this file is how you
+see the change: read all of it with your read tool, continuing with offset until the end (each read
+returns at most 2000 lines). You may skip the hunks of generated files (lockfiles, build output) the
+--stat names. The watchdog_diff tool does not see commits; do not use it.
+${diff.files.length ? `Changed files: ${diff.files.join(", ")}.` : "The diff is empty: nothing on this branch differs from main."}`
+    : `The diff for this round could not be prepared (${diff.record}) and you cannot run git. Review ${files.length ? `the changed files: ${files.join(", ")}` : "the files the spec says change"}.`;
   return `${CONTEXT}
 
 You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
-Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and ${scope}.
-Read any other file you need. Do not edit anything.${priorRound(prior)}
+${source}
+Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and any other file you
+need, including a changed file in full when its hunks are not enough. Do not edit anything.${priorRound(prior)}
 Report findings with severity: blocker (wrong or unsafe; must fix), major (should fix before merge),
 minor, nit. Give each an id of the form "${lens}-r${round}-<n>" (e.g. "${lens}-r${round}-1");
-when a finding repeats one from an earlier round, say so in problem. verdict is "changes" only if there is at
-least one blocker or major finding. Do not pad: zero findings is a valid review.`;
+when a finding repeats one from an earlier round, say so in problem. Set location to "path:line",
+where line is the line's number in the branch's version of the file (in the diff, count from the
++start in the hunk's @@ header), or "-" when the finding is not about one place. verdict is
+"changes" only if there is at least one blocker or major finding. Do not pad: zero findings is a
+valid review.`;
 }
-function reviewBatch(lensList, files, round, prior) {
+function reviewBatch(lensList, diff, files, round, prior) {
   return runs.all(lensList.map((lens) => Object.assign({
     key: `review-${lens}-r${round}`,
     label: `Review issue #${issue} ${lens} r${round}`,
@@ -247,7 +310,7 @@ function reviewBatch(lensList, files, round, prior) {
     model: OPUS,
     cwd,
     outputSchema: reviewSchema,
-    task: reviewTask(lens, files, round, prior),
+    task: reviewTask(lens, diff, files, round, prior),
   }, withSkill(LENS_SKILLS[lens]))));
 }
 function blocking(results, lensList) {
@@ -273,10 +336,11 @@ function minors(results, lensList) {
 let files = implOut.changed_files || [];
 let checks = implOut.checks || {};
 let activeLenses = lenses.slice();
-let results = await reviewBatch(activeLenses, files, 0);
+let diff = diffFor(await diffRun(0), 0);
+let results = await reviewBatch(activeLenses, diff, files, 0);
 let open = blocking(results, activeLenses);
 let followUps = minors(results, activeLenses);
-const history = [{ round: 0, lenses: activeLenses, blocking: open.length }];
+const history = [{ round: 0, lenses: activeLenses, diff: diff.record, blocking: open.length }];
 let round = 0;
 
 while (open.length && round < maxRounds) {
@@ -326,10 +390,11 @@ Report every finding id in responses and all files you changed.`,
   checks = revOut.checks || checks;
   const prior = { findings: open, responses: revOut.responses || [] };
   activeLenses = Array.from(new Set(open.map((f) => f.lens)));
-  results = await reviewBatch(activeLenses, files, round, prior);
+  diff = diffFor(await diffRun(round), round);
+  results = await reviewBatch(activeLenses, diff, files, round, prior);
   open = blocking(results, activeLenses);
   followUps = followUps.concat(minors(results, activeLenses));
-  history.push({ round, lenses: activeLenses, blocking: open.length, responses: revOut.responses || [] });
+  history.push({ round, lenses: activeLenses, diff: diff.record, blocking: open.length, responses: revOut.responses || [] });
 }
 
 // ---- 5. Follow-up issue, PR -----------------------------------------------------------
@@ -363,8 +428,8 @@ You are the PR stage. Do not change code.
    gh api -X POST repos/${repo}/issues/${parent}/sub_issues -F sub_issue_id=$(gh api repos/${repo}/issues/<new number> --jq .id)` : ""}` : "There are no minor/nit findings; skip this step and report followup_issue null."}
 3. Write the PR body (to a file, then --body-file):
    - "Closes #${issue}" and a short summary from ${specPath}.
-   - "Factory record": a table with one row per review round (round, lenses, blocking findings,
-     what was fixed or declined, one line each) from ${JSON.stringify(history)}; then the checks
+   - "Factory record": a table with one row per review round (round, lenses, the diff the
+     reviewers read, blocking findings, what was fixed or declined, one line each) from ${JSON.stringify(history)}; then the checks
      ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
    - "Follow-ups": one line linking the follow-up issue from step 2 (omit if none).
