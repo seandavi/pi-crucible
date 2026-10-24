@@ -14,6 +14,6 @@ uses the engine. Examples:
 Please report privately through
 [GitHub private vulnerability reporting](https://github.com/seandavi/pi-factory/security/advisories/new),
 not in a public issue. Expect an acknowledgement within a week. Fixes land on `main`, which is
-what every install tracks (`pi update` picks them up).
+what every install tracks (`pi update --extensions` picks them up).
 
 Only `main` is supported; there are no release branches.

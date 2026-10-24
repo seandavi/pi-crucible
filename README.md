@@ -40,7 +40,7 @@ fail. Details: [docs/factory.md](docs/factory.md).
 pi install git:github.com/seandavi/pi-factory
 ```
 
-The package tracks `main`; `pi update` brings in the latest. It adds the `/factory` command and
+The package tracks `main`; `pi update --extensions` brings in the latest. It adds the `/factory` command and
 registers the workflow as the named pi-subagents resource `pi-factory`.
 
 ## Set up a repository

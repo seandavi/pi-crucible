@@ -91,7 +91,7 @@ and `.pi/factory.json`. The engine holds no project text; everything below reach
 
 ## Installing
 
-The engine is a pi package. Install it on each machine from git main (no tags; `pi update`
+The engine is a pi package. Install it on each machine from git main (no tags; `pi update --extensions`
 pulls the latest main):
 
 ```sh

@@ -1,7 +1,7 @@
 # Contributing
 
 pi-factory is the shared engine behind factory runs in several repositories. Every change here
-reaches all of them on their next `pi update`, so changes go through an issue and a PR, and the
+reaches all of them on their next `pi update --extensions`, so changes go through an issue and a PR, and the
 bar is "every consuming repo still works", not "my repo works".
 
 By taking part you agree to the [Code of Conduct](CODE_OF_CONDUCT.md). Report security problems
