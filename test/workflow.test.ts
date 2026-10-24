@@ -366,7 +366,7 @@ test("the integration re-review follows the last revise round", async () => {
   assert.match(task("review-code-r2"), /"code-r2-<n>"/);
 });
 
-test("integration re-review findings replace earlier code findings and make a draft", async () => {
+test("integration re-review findings add to earlier findings and make a draft", async () => {
   const finding = (id: string, severity: string) => ({ id, severity, location: "a.ts:1", problem: "p", fix: "f" });
   const run = (withMinor: boolean) => simulate({ ...args, maxRounds: 1 }, (key) => {
     if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [finding("code-r0-1", "blocker")] } };
@@ -380,10 +380,24 @@ test("integration re-review findings replace earlier code findings and make a dr
   });
   const { result, calls } = await run(true);
   assert.ok(keysOf(calls).includes("review-code-r2"));
-  assert.deepEqual(result.unresolved.map((f: { id: string }) => f.id), ["ux-r1-1", "code-r2-1"]);
+  assert.deepEqual(result.unresolved.map((f: { id: string }) => f.id), ["code-r1-1", "ux-r1-1", "code-r2-1"]);
   assert.equal(result.draft, true);
   const without = await run(false);
   assert.equal(result.followUps, without.result.followUps + 1);
+});
+
+test("an approving integration re-review does not clear earlier code findings", async () => {
+  const finding = (id: string) => ({ id, severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" });
+  const { result } = await simulate({ ...args, maxRounds: 1 }, (key) => {
+    if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [finding("code-r0-1")] } };
+    if (key === "revise-r1") return { structuredOutput: { status: "done", responses: [], changed_files: ["a.ts"], checks: { test: "pass" } } };
+    if (key === "review-code-r1") return { structuredOutput: { verdict: "changes", findings: [finding("code-r1-1")] } };
+    if (key === "integrate") return failingTest();
+    return happy()(key);
+  });
+  assert.equal(result.integration.reReview, 2);
+  assert.deepEqual(result.unresolved.map((f: { id: string }) => f.id), ["code-r1-1"]);
+  assert.equal(result.draft, true);
 });
 
 test("integration that cannot run, or a fix that fails, opens a draft without flagging", async () => {

@@ -64,8 +64,9 @@ the branch (a merge commit, never a rebase) and runs every configured check in f
 conflict or a failing check, one Sonnet fix round gets the conflicting paths or the checks'
 output, fixes the branch without reverting main's changes, and a Haiku re-check merges and runs
 the checks again. If the fix touched files other than tests, fixtures and test data, the `code`
-lens re-reviews in one more round, with its own diff; its blocker/major findings stay unresolved
-rather than starting another revise round. The checks the PR reports are the post-merge ones, and
+lens re-reviews in one more round, with its own diff; its blocker/major findings are added to the
+still-open ones (it judges the fix, so it never clears an earlier finding) rather than starting
+another revise round. The checks the PR reports are the post-merge ones, and
 its factory record gets an Integration line. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 

@@ -549,7 +549,7 @@ was reviewed in earlier rounds: raise findings there only where the fix or main'
         diff = diffFor(await diffRun(r), r);
         const fixReview = await reviewBatch(["code"], diff, files, r, null, note);
         const fixBlocking = blocking(fixReview, ["code"]);
-        open = open.filter((f) => f.lens !== "code").concat(fixBlocking);
+        open = open.concat(fixBlocking);
         followUps = followUps.concat(minors(fixReview, ["code"]));
         history.push({ round: r, lenses: ["code"], diff: diff.record, blocking: fixBlocking.length, after: "integration fix" });
         integration.reReview = r;

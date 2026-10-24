@@ -74,9 +74,9 @@ Rules:
   `"error"` if the re-check itself fails.
 - After a successful fix (`status: "done"`), the `code` lens re-reviews if the fix reported at
   least one non-test file. This happens whether the re-check passed or not. In `open`, the
-  re-review's blocker/major findings replace the earlier `code` findings, because the reviewer has
-  just read the whole diff again. Findings from other lenses stay. Minor/nit findings join
-  `followUps`.
+  re-review's blocker/major findings are added to the earlier findings, which all stay: the
+  re-review is narrow (it judges the fix, not the whole diff), so it cannot clear a finding an
+  earlier round left unresolved. Minor/nit findings join `followUps`.
 - The checks reported in the PR become the last integration run's results (re-check, else first
   run, else the fix's) whenever there are any. Otherwise they stay what implement/revise reported.
 - The PR is a draft if blocker/major findings remain, if any check fails, **or if the integration
@@ -288,7 +288,7 @@ was reviewed in earlier rounds: raise findings there only where the fix or main'
         diff = diffFor(await diffRun(r), r);
         const fixReview = await reviewBatch(["code"], diff, files, r, null, note);
         const fixBlocking = blocking(fixReview, ["code"]);
-        open = open.filter((f) => f.lens !== "code").concat(fixBlocking);
+        open = open.concat(fixBlocking);
         followUps = followUps.concat(minors(fixReview, ["code"]));
         history.push({ round: r, lenses: ["code"], diff: diff.record, blocking: fixBlocking.length, after: "integration fix" });
         integration.reReview = r;
@@ -540,8 +540,8 @@ No change. `/factory 12 --dry-run` prints the same args. `src/launcher.ts` and
       and nothing for other lenses. The review prompt carries the integration note (the merged
       commit, the conflict or the failing checks, the fix's files and summary). The history gains
       `{ round, lenses: ["code"], diff, blocking, after: "integration fix" }`, and
-      `integration.reReview` is that round. Its blocker/major findings replace earlier `code`
-      entries in `open`, and its minor/nit findings join the follow-ups.
+      `integration.reReview` is that round. Its blocker/major findings are added to `open`
+      (earlier findings, `code` ones included, stay), and its minor/nit findings join the follow-ups.
 - [ ] A fix whose `non_test_files` is empty leads to no re-review. A fix with no `non_test_files`
       field falls back to `changed_files`.
 - [ ] `integrate` failing (`ok: false` or `status: "blocked"`) gives status `"error"`, no fix, no
@@ -623,13 +623,16 @@ New tests:
    failing integrate, the keys after `review-code-r1` are
    `integrate, integrate-fix, integrate-recheck, diff-r2, review-code-r2, pr`, and the
    `review-code-r2` prompt asks for ids `code-r2-<n>`.
-7. **"integration re-review findings replace earlier code findings and make a draft"**: with
+7. **"integration re-review findings add to earlier findings and make a draft"**: with
    `maxRounds: 1`, round 0 returns a `code` blocker and a `ux` major. After `revise-r1`,
    `review-code-r1` returns blocker `code-r1-1` and `review-ux-r1` returns major `ux-r1-1`, so the
    loop ends with both open. A failing integrate, a successful fix with `non_test_files: ["a.ts"]`,
    and `review-code-r2` returning major `code-r2-1` plus one minor give `result.unresolved` ids
-   `["ux-r1-1", "code-r2-1"]` (no `code-r1-1`), `result.draft === true`, and a `result.followUps`
-   one higher than the same run without that minor.
+   `["code-r1-1", "ux-r1-1", "code-r2-1"]` (nothing dropped), `result.draft === true`, and a
+   `result.followUps` one higher than the same run without that minor.
+   A second case: same setup, but `review-code-r2` approves with no findings. `result.unresolved`
+   ids are still `["code-r1-1", "ux-r1-1"]` and `result.draft === true`: a narrow re-review cannot
+   clear a finding it never re-judged.
 8. **"integration that cannot run, or a fix that fails, opens a draft without flagging"**:
    (a) `integrate: { ok: false, error: "boom" }` gives keys ending `integrate, pr`, status
    `"error"`, note `"boom"`, `draft === true`, no `flag-*` key, and the PR task contains
