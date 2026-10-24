@@ -10,7 +10,7 @@ const valid = validArgs;
 test("valid args resolve to the shipped script", () => {
   const script = loadScript();
   assert.match(script, /runs\.run\("spec"/);
-  assert.deepEqual(factoryResource(script).resolve(valid), { script });
+  assert.deepEqual(factoryResource(script).resolve(valid), { script: `const FACTORY_ARGS = ${JSON.stringify(valid)};\n${script}` });
 });
 
 test("only the required args are needed", () => {

@@ -113,8 +113,12 @@ gives each package its own module root. What that means in practice:
 - `resolve` must be synchronous with no I/O. The extension reads `workflows/factory.js` on
   `session_start` and `resolve` validates the args (`src/resource.ts`) and returns that text.
   Bad args fail before any child starts, with every problem listed.
-- The script still sees the caller's `args`; receipts record the resource name and version as
-  provenance; `options.reuseFrom` resumes a named run.
+- pi-subagents hands a named resource's `args` only to `resolve`; the sandbox starts with empty
+  `args` (`subagent-executor.js`: `const { workflow, args, ...rest } = publicParams`). So `resolve`
+  prepends the validated args to the script as `const FACTORY_ARGS = {...};`, and the script uses
+  them, falling back to `args` when launched by path. (Corrected 2026-10-24: the first note here
+  said the script sees `args`; the first real `/factory` run failed on exactly that.) Receipts record
+  the resource name and version as provenance.
 - If a future pi-subagents changes the registry version, launches fail with "Unknown workflow
   resource 'pi-factory'". Fallback: pass the installed script's path as `workflow` (raw-script
   provenance, otherwise identical), then bump the `pi-subagents` dependency here.
