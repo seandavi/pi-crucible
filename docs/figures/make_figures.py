@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Draw the README's workflow figure as SVG, in a light and a dark variant. Stdlib only.
 
-    python3 docs/figures/make_figures.py     # writes docs/figures/factory-flow-{light,dark}.svg
+    python3 docs/figures/make_figures.py     # writes docs/figures/crucible-flow-{light,dark}.svg
 
 The README picks a variant with <picture> and prefers-color-scheme. Backgrounds are transparent;
 label backings use GitHub's page colours so they blend with either theme. Every stage, model and
-label drawn here comes from workflows/factory.js: change the figure when the script changes.
+label drawn here comes from workflows/crucible.js: change the figure when the script changes.
 """
 from html import escape
 from pathlib import Path
@@ -101,12 +101,12 @@ class Figure:
         return w
 
 
-def factory_flow(theme: dict[str, str]) -> str:
+def crucible_flow(theme: dict[str, str]) -> str:
     f = Figure(theme)
     top, h = 110, 175
     mid = top + h / 2
 
-    f.box(30, top, 240, h, "/factory <issue>", [".pi/factory.json @ main", "worktree + branch", "lenses from labels",
+    f.box(30, top, 240, h, "/crucible <issue>", [".pi/crucible.json @ main", "worktree + branch", "lenses from labels",
                                                 "args checked first"], "MUTED")
     f.box(330, top, 240, h, "Spec · Opus", ["docs/specs/", "  <n>-<slug>.md", "one commit"], "VIOLET")
     f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "configured checks"],
@@ -173,7 +173,7 @@ def factory_flow(theme: dict[str, str]) -> str:
     w = f.pill(x, ly - 12, "--start-at", "GREEN")
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
-    return f.svg(2120, 720, "The factory workflow: launch, spec (Opus), implement (Sonnet), a diff "
+    return f.svg(2120, 720, "The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff "
                             "(Haiku) before each round of parallel review lenses (Opus), up to two "
                             "revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix "
                             "round), then a PR (Sonnet) that a human merges. Spec or implement can "
@@ -182,5 +182,5 @@ def factory_flow(theme: dict[str, str]) -> str:
 
 if __name__ == "__main__":
     for name, theme in THEMES.items():
-        (OUT / f"factory-flow-{name}.svg").write_text(factory_flow(theme))
-        print(f"wrote factory-flow-{name}.svg")
+        (OUT / f"crucible-flow-{name}.svg").write_text(crucible_flow(theme))
+        print(f"wrote crucible-flow-{name}.svg")

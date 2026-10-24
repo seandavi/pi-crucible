@@ -1,6 +1,6 @@
 # Contributing
 
-pi-factory is the shared engine behind factory runs in several repositories. Every change here
+pi-crucible is the shared engine behind crucible runs in several repositories. Every change here
 reaches all of them on their next `pi update --extensions`, so changes go through an issue and a PR, and the
 bar is "every consuming repo still works", not "my repo works".
 
@@ -11,9 +11,9 @@ privately ([SECURITY.md](SECURITY.md)).
 
 | Change | Lives in |
 |---|---|
-| Stages, prompts, review-lens machinery, stop rules | `workflows/factory.js` (this repo) |
-| Packaging, `/factory`, the `pi-factory` resource, config schema, args validation | `extensions/`, `src/`, `schema/` (this repo) |
-| Design sources, lens texts, skills, check commands for one project | that project's `AGENTS.md` and `.pi/factory.json` (examples in `examples/`) |
+| Stages, prompts, review-lens machinery, stop rules | `workflows/crucible.js` (this repo) |
+| Packaging, `/crucible`, the `pi-crucible` resource, config schema, args validation | `extensions/`, `src/`, `schema/` (this repo) |
+| Design sources, lens texts, skills, check commands for one project | that project's `AGENTS.md` and `.pi/crucible.json` (examples in `examples/`) |
 
 If a change only makes sense for one project, it belongs in that project's config. The engine
 stays project-neutral.
@@ -24,18 +24,18 @@ stays project-neutral.
   the engine commit.
 - **Engine change**: a proposal. Link the runs or findings that motivate it. Settle the design
   in the issue before writing code.
-- **Factory run report**: what a run did. These reports are the experiment's data: which
+- **Run report**: what a run did. These reports are the experiment's data: which
   findings led to a change, whether round two converged, and what had to be fixed by hand.
 
 Labels the engine and its runs use:
 
 | Label | Meaning |
 |---|---|
-| `needs:human` | Waiting on a person. The factory adds it on every stop and to every PR it opens; remove it when you have acted. |
+| `needs:human` | Waiting on a person. pi-crucible adds it on every stop and to every PR it opens; remove it when you have acted. |
 | `seam` | A shared foundation that later issues build on. Reviewers then rate defects by blast radius. |
-| `review:ux`, `review:security` | Add that review lens to a factory run (`code` always runs). |
+| `review:ux`, `review:security` | Add that review lens to a crucible run (`code` always runs). |
 | `tracking` | Has sub-issues; closes when they do. |
-| `run-report` | A factory run report. |
+| `run-report` | A crucible run report. |
 
 ## Making a change
 
@@ -45,19 +45,19 @@ Labels the engine and its runs use:
 
    ```sh
    npm test          # args validation; registration round trip through pi-subagents
-   npm run check     # workflows/factory.js parses as the sandbox runs it
+   npm run check     # workflows/crucible.js parses as the sandbox runs it
    ```
 
-   If you touched `workflows/factory.js`, also validate it from a pi session:
-   `subagent({ action: "validate", workflow: "<path>/workflows/factory.js" })`.
+   If you touched `workflows/crucible.js`, also validate it from a pi session:
+   `subagent({ action: "validate", workflow: "<path>/workflows/crucible.js" })`.
 4. To try the engine from your checkout instead of the installed copy, start pi with
-   `pi -e <checkout>/extensions/factory.ts`. The script is re-read at each session start.
-   Don't `/reload` while a factory run is active; resume with `options.reuseFrom` instead.
+   `pi -e <checkout>/extensions/crucible.ts`. The script is re-read at each session start.
+   Don't `/reload` while a crucible run is active; resume with `options.reuseFrom` instead.
 5. Keep things in step:
-   - Args added or changed in `factory.js` → update `src/resource.ts` in the same commit.
+   - Args added or changed in `crucible.js` → update `src/resource.ts` in the same commit.
    - Config fields added or changed → update `src/config.ts`, run `npm run schema`, and update
-     Table 2 in `docs/factory.md` and the files in `examples/`.
-   - Stages, models, lenses or stop rules changed → update `docs/factory.md` and regenerate the
+     Table 2 in `docs/crucible.md` and the files in `examples/`.
+   - Stages, models, lenses or stop rules changed → update `docs/crucible.md` and regenerate the
      figure with `python3 docs/figures/make_figures.py` (stdlib only; commit the SVGs).
 6. Open a PR with the template. Say what you could not verify.
 
@@ -76,7 +76,7 @@ rebasing anything already pushed.
 
 ## Merging
 
-A person merges, never the factory. The bar is green CI and the PR's checklist.
+A person merges, never pi-crucible. The bar is green CI and the PR's checklist.
 
 ## License
 
