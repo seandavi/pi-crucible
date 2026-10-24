@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { EngineConfig, FactoryFile } from "../src/config.ts";
+import type { EngineConfig, CrucibleFile } from "../src/config.ts";
 
 export const engineConfig: EngineConfig = {
   design: "The design record is README.md.",
@@ -9,7 +9,7 @@ export const engineConfig: EngineConfig = {
   lenses: { code: "CODE review.", ux: "UX review." },
 };
 
-export const factoryFile: FactoryFile = { ...engineConfig, parent: 1, defaultLenses: ["code"] };
+export const crucibleFile: CrucibleFile = { ...engineConfig, parent: 1, defaultLenses: ["code"] };
 
 export const validArgs = {
   repo: "seandavi/bioc-mcp",

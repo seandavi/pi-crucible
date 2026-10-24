@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
-import extension from "../extensions/factory.ts";
-import { argErrors, factoryResource, loadScript, RESOURCE_NAME } from "../src/resource.ts";
+import extension from "../extensions/crucible.ts";
+import { argErrors, crucibleResource, loadScript, RESOURCE_NAME } from "../src/resource.ts";
 import { engineConfig, fakePi, validArgs } from "./fixtures.ts";
 
 const valid = validArgs;
@@ -10,7 +10,7 @@ const valid = validArgs;
 test("valid args resolve to the shipped script", () => {
   const script = loadScript();
   assert.match(script, /runs\.run\("spec"/);
-  assert.deepEqual(factoryResource(script).resolve(valid), { script: `const FACTORY_ARGS = ${JSON.stringify(valid)};\n${script}` });
+  assert.deepEqual(crucibleResource(script).resolve(valid), { script: `const CRUCIBLE_ARGS = ${JSON.stringify(valid)};\n${script}` });
 });
 
 test("only the required args are needed", () => {
@@ -29,9 +29,9 @@ test("missing, unknown and malformed args are all reported", () => {
     'missing required arg "slug"',
     'unknown arg "typo" (known: repo, issue, slug, worktree, branch, lenses, maxRounds, seam, startAt, parent, config, engine)',
   ]);
-  const resolved = factoryResource("x").resolve({});
+  const resolved = crucibleResource("x").resolve({});
   assert.ok("error" in resolved && resolved.error.includes('missing required arg "config"'));
-  assert.ok("error" in resolved && resolved.error.startsWith("pi-factory: missing required arg"));
+  assert.ok("error" in resolved && resolved.error.startsWith("pi-crucible: missing required arg"));
 });
 
 // The extension registers through its own copy of pi-subagents; the host resolves through the copy
@@ -65,4 +65,23 @@ test("code always runs, even when a hand launch names only other lenses", () => 
   assert.deepEqual(argErrors({ ...valid, lenses: ["ux"] }), []);
   const noCode = { ...engineConfig, lenses: { ux: "u" } };
   assert.match(argErrors({ ...valid, lenses: ["ux"], config: noCode }).join(), /must define the "code" lens/);
+});
+
+test("the pre-rename resource name pi-factory still resolves", async () => {
+  const { resolveWorkflowResource } = await import(
+    new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
+  );
+  const { pi, handlers } = fakePi();
+  extension(pi as never);
+  const ctx = { sessionManager: { getSessionId: () => "legacy-session" } };
+  handlers.session_start({}, ctx);
+  try {
+    for (const name of ["pi-crucible", "pi-factory"]) {
+      const r = resolveWorkflowResource(name, valid, "legacy-session");
+      assert.equal(r.ok, true, `${name}: ${r.error}`);
+      assert.equal(r.resource.provenance.name, name);
+    }
+  } finally {
+    handlers.session_shutdown({}, ctx);
+  }
 });

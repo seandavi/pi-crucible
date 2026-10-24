@@ -1,4 +1,4 @@
-// Runs workflows/factory.js the way the pi-subagents sandbox does (the file is the body of an async
+// Runs workflows/crucible.js the way the pi-subagents sandbox does (the file is the body of an async
 // function of `args` and `runs`), with a fake `runs` that records every child task and answers from
 // a script of structured outputs.
 import { test } from "node:test";
@@ -45,7 +45,7 @@ test("every stage's prompt comes from the config, not the engine", async () => {
   assert.match(task("implement"), /- test: npm test/);
   assert.match(task("review-code-r0"), /Lens: CODE review\./);
   assert.match(task("review-ux-r0"), /Lens: UX review\./);
-  assert.match(task("pr"), /Engine: seandavi\/pi-factory@4d310bf \(with uncommitted changes\)/);
+  assert.match(task("pr"), /Engine: seandavi\/pi-crucible@4d310bf \(with uncommitted changes\)/);
   assert.match(task("spec"), /Commit with: git commit\n/, "no commitAuthor: the worktree's identity");
   const all = calls.map((c) => c.task).join("\n");
   assert.doesNotMatch(all, /bioc|zod|MCP tool|workers-best-practices|seandavi@/i);
@@ -179,7 +179,7 @@ test("a PR stage that opens no PR, or fails, flags a human and stops", async () 
   assert.match(calls.at(-1)!.task, /Stage: pr\. boom/);
 });
 
-const dir = "/tmp/repo-worktrees/issue-2/.pi/factory-review";
+const dir = "/tmp/repo-worktrees/issue-2/.pi/crucible-review";
 const blockerOnCode = (key: string): Answer =>
   key === "review-code-r0"
     ? { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" }] } }
@@ -231,17 +231,17 @@ test("a failed diff step degrades the review and does not stop the run", async (
     assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "integrate", "pr"]);
     assert.match(task("review-code-r0"), /could not be prepared/);
     assert.ok(task("review-code-r0").includes("the changed files: a.ts"));
-    assert.ok(!task("review-code-r0").includes(".pi/factory-review"));
+    assert.ok(!task("review-code-r0").includes(".pi/crucible-review"));
     assert.equal(result.rounds[0].diff, record);
     assert.ok(task("pr").includes(record));
   }
 });
 
-test("the factory record shows the diff each round read", async () => {
+test("the crucible record shows the diff each round read", async () => {
   const { result, task } = await simulate(args, happy());
-  assert.equal(result.rounds[0].diff, ".pi/factory-review/r0.diff (120 lines, 2 files)");
+  assert.equal(result.rounds[0].diff, ".pi/crucible-review/r0.diff (120 lines, 2 files)");
   assert.ok(task("pr").includes("the diff the"));
-  assert.ok(task("pr").includes('"diff":".pi/factory-review/r0.diff (120 lines, 2 files)"'));
+  assert.ok(task("pr").includes('"diff":".pi/crucible-review/r0.diff (120 lines, 2 files)"'));
 });
 
 test("on --start-at review the reviewers get git's file list", async () => {
@@ -250,7 +250,7 @@ test("on --start-at review the reviewers get git's file list", async () => {
   assert.ok(task("review-code-r0").includes("Changed files: a.ts, b.ts."));
 });
 
-// The regression behind the first /factory run (2fbd7098): pi-subagents gives a named resource's args
+// The regression behind the first /crucible run (2fbd7098): pi-subagents gives a named resource's args
 // only to resolve and starts the sandbox with empty args. Resolve the way the subagent tool does and
 // run the result exactly so.
 test("launched by name, the script gets its args from resolve, not the sandbox", async () => {
@@ -258,11 +258,11 @@ test("launched by name, the script gets its args from resolve, not the sandbox",
     new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
   );
   const { registerWorkflowResource } = await import("pi-subagents/workflow-resources");
-  const { factoryResource } = await import("../src/resource.ts");
-  const reg = registerWorkflowResource({ sessionId: "by-name", definition: factoryResource(loadScript()) });
+  const { crucibleResource } = await import("../src/resource.ts");
+  const reg = registerWorkflowResource({ sessionId: "by-name", definition: crucibleResource(loadScript()) });
   try {
     const { startAt: _unset, ...jsonArgs } = args;
-    const resolved = resolveWorkflowResource("pi-factory", jsonArgs, "by-name");
+    const resolved = resolveWorkflowResource("pi-crucible", jsonArgs, "by-name");
     assert.equal(resolved.ok, true, resolved.error);
     const { result, task } = await simulate({}, happy(), resolved.resource.script);
     assert.equal(result.pr, "https://github.com/o/r/pull/9");
@@ -331,8 +331,8 @@ test("a conflict gets one fix round, a re-check and a code re-review", async () 
   assert.match(fix, /docs\/specs\/2-scaffold\.md/);
   assert.match(task("review-code-r1"), /INTEGRATION FIX/);
   assert.match(task("review-code-r1"), /conflicted in src\/tools\.ts/);
-  assert.ok(task("review-code-r1").includes("/.pi/factory-review/r1.diff"));
-  assert.deepEqual(result.rounds.at(-1), { round: 1, lenses: ["code"], diff: ".pi/factory-review/r1.diff (120 lines, 2 files)", blocking: 0, after: "integration fix" });
+  assert.ok(task("review-code-r1").includes("/.pi/crucible-review/r1.diff"));
+  assert.deepEqual(result.rounds.at(-1), { round: 1, lenses: ["code"], diff: ".pi/crucible-review/r1.diff (120 lines, 2 files)", blocking: 0, after: "integration fix" });
   assert.equal(result.integration.reReview, 1);
   assert.equal(result.integration.status, "pass");
   assert.deepEqual(result.integration.conflicts, ["src/tools.ts"]);
@@ -436,5 +436,17 @@ test("only the integration stages may merge", async () => {
 test("a PR stage stop still reports the integration", async () => {
   const { result } = await simulate(args, happy({ pr: { ok: false, error: "boom" } }));
   assert.equal(result.stopped, true);
+  assert.equal(result.integration.status, "pass");
+});
+
+test("with no checks configured, stages say so and integration still passes", async () => {
+  const config = { ...engineConfig, checks: [] };
+  const { result, task } = await simulate({ ...args, config }, (key, opts) => {
+    if (key === "implement") return { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: {} } };
+    if (key === "integrate") return { structuredOutput: { status: "done", main: "abc1234", merge: "up-to-date", conflicts: [], checks: {} } };
+    return happy()(key);
+  });
+  assert.match(task("implement"), /\(none configured: say so in summary/);
+  assert.equal(result.draft, false);
   assert.equal(result.integration.status, "pass");
 });

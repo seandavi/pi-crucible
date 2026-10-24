@@ -1,11 +1,11 @@
-// A repository's factory configuration: `.pi/factory.json`.
+// A repository's pi-crucible configuration: `.pi/crucible.json`.
 //
 // The file has two parts. The launcher reads all of it. The engine part (EngineConfig) is everything
 // the workflow script needs to know about the project, and travels to the script as `args.config`,
 // because the sandbox cannot read files. pi-subagents caps args at 16 KiB of JSON and 16 fields per
 // object, so the limits below keep the engine part inside those bounds.
 //
-// The schema is the single source of truth: schema/factory.schema.json is generated from it
+// The schema is the single source of truth: schema/crucible.schema.json is generated from it
 // (npm run schema) for editors, and the tests fail if the two drift.
 
 import { Type, type Static } from "typebox";
@@ -43,7 +43,7 @@ export const EngineConfig = Type.Object(
         },
         { additionalProperties: false },
       ),
-      { minItems: 1, maxItems: 8, description: "Commands every writing stage runs and reports, by name; integration runs all of them after merging main." },
+      { maxItems: 8, description: "Commands every writing stage runs and reports, by name; integration runs all of them after merging main. Empty: the run reports \"no checks configured\"." },
     ),
     lenses: Type.Record(Name, Text("What this reviewer checks.", 3000), {
       additionalProperties: false,
@@ -99,15 +99,15 @@ const LAUNCHER_FIELDS = {
   ),
 };
 
-export const FactoryFile = Type.Object(
+export const CrucibleFile = Type.Object(
   { ...LAUNCHER_FIELDS, ...EngineConfig.properties },
   {
     additionalProperties: false,
-    title: "pi-factory configuration (.pi/factory.json)",
-    description: "See https://github.com/seandavi/pi-factory/blob/main/docs/factory.md",
+    title: "pi-crucible configuration (.pi/crucible.json)",
+    description: "See https://github.com/seandavi/pi-crucible/blob/main/docs/crucible.md",
   },
 );
-export type FactoryFile = Static<typeof FactoryFile>;
+export type CrucibleFile = Static<typeof CrucibleFile>;
 
 function errors(schema: Parameters<typeof Value.Errors>[0], value: unknown, extra: string[]): string[] {
   const out = [...Value.Errors(schema, value)]
@@ -137,8 +137,8 @@ export function engineConfigErrors(value: unknown): string[] {
   return engineRules(value);
 }
 
-export function factoryFileErrors(value: unknown): string[] {
-  if (!Value.Check(FactoryFile, value)) return errors(FactoryFile, value, []);
+export function crucibleFileErrors(value: unknown): string[] {
+  if (!Value.Check(CrucibleFile, value)) return errors(CrucibleFile, value, []);
   const out = engineRules(value);
   if (value.defaultLenses && !value.defaultLenses.includes("code")) out.push('/defaultLenses: must include "code"');
   for (const lens of value.defaultLenses ?? []) {
@@ -148,7 +148,7 @@ export function factoryFileErrors(value: unknown): string[] {
 }
 
 /** The part of the file the workflow script receives as args.config. */
-export function engineConfigOf(file: FactoryFile): EngineConfig {
+export function engineConfigOf(file: CrucibleFile): EngineConfig {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(EngineConfig.properties)) {
     if ((file as Record<string, unknown>)[key] !== undefined) out[key] = (file as Record<string, unknown>)[key];

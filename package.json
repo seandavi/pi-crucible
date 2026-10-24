@@ -1,5 +1,5 @@
 {
-  "name": "pi-factory",
+  "name": "pi-crucible",
   "version": "0.1.0",
   "private": true,
   "description": "spec → implement → review → revise → PR loop for GitHub issues, as a pi-subagents workflow",
@@ -7,14 +7,14 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/seandavi/pi-factory.git"
+    "url": "git+https://github.com/seandavi/pi-crucible.git"
   },
   "keywords": [
     "pi-package"
   ],
   "pi": {
     "extensions": [
-      "./extensions/factory.ts"
+      "./extensions/crucible.ts"
     ]
   },
   "files": [

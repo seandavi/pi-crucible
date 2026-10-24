@@ -96,9 +96,8 @@
         },
         "additionalProperties": false
       },
-      "minItems": 1,
       "maxItems": 8,
-      "description": "Commands every writing stage runs and reports, by name; integration runs all of them after merging main."
+      "description": "Commands every writing stage runs and reports, by name; integration runs all of them after merging main. Empty: the run reports \"no checks configured\"."
     },
     "lenses": {
       "type": "object",
@@ -179,6 +178,6 @@
     }
   },
   "additionalProperties": false,
-  "title": "pi-factory configuration (.pi/factory.json)",
-  "description": "See https://github.com/seandavi/pi-factory/blob/main/docs/factory.md"
+  "title": "pi-crucible configuration (.pi/crucible.json)",
+  "description": "See https://github.com/seandavi/pi-crucible/blob/main/docs/crucible.md"
 }
