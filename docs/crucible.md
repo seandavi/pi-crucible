@@ -91,6 +91,16 @@ and the PR's crucible record ends with `Engine: seandavi/pi-crucible@<sha>`. The
 
 **Never automated:** merging the PR. A human merges, from the main session. (The integration stage merges main into the branch, never the branch into main.)
 
+**The host session:** the pi session that launched a run is a full agent, and pi-subagents wakes it
+with a turn when the run finishes, telling it to "resume the already-authorized parent task". A host
+whose instructions or agent memory say to merge PRs on green will merge a crucible PR within seconds
+of it opening: on bioc-registry #68, a headless `pi --mode rpc` host did (#35). So every result the
+workflow returns starts with `host`, a note that a person merges the PR and the session should report
+the outcome in one line and do nothing else with the PR or the issue. The wake prints the result
+first, and `/crucible` also appends the same note to the session when it launches the run. This is an
+instruction, not enforcement: for a guarantee, protect `main` with required reviews. A headless
+launch with no host to wake is #30.
+
 ## Configuring a repository
 
 Each repository that uses the engine keeps two things: `AGENTS.md`, which every stage reads first,
@@ -216,6 +226,12 @@ read-only and have no shell, so they skip the check and read the diff the diff s
 ```js
 subagent({ workflow: "pi-crucible", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })
 ```
+
+A hand launch gets the note in its completion wake but not the message `/crucible` adds at launch.
+If the session or agent that launches it has standing merge instructions, tell it before launching
+that it only hosts the run. This worked on bioc-registry #78: "You are only hosting this crucible
+run. When it finishes, report the PR URL in one line and stop. Do not merge, push, comment, close
+issues, or deploy."
 
 ## What to watch while it is an experiment
 

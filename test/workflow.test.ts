@@ -3,6 +3,7 @@
 // a script of structured outputs.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { HOST_NOTE } from "../src/launcher.ts";
 import { loadScript } from "../src/resource.ts";
 import { engineConfig, validArgs } from "./fixtures.ts";
 
@@ -449,4 +450,22 @@ test("with no checks configured, stages say so and integration still passes", as
   assert.match(task("implement"), /\(none configured: say so in summary/);
   assert.equal(result.draft, false);
   assert.equal(result.integration.status, "pass");
+});
+
+test("every result tells the host session that a person merges the PR", async () => {
+  const blocked = { structuredOutput: { status: "blocked", spec_path: "x", blocking_questions: ["Which DB?"] } };
+  const runs: [string, Parameters<typeof happy>[0]][] = [
+    ["success", {}],
+    ["spec", { spec: blocked }],
+    ["implement", { implement: { structuredOutput: { status: "blocked", summary: "x" } } }],
+    ["pr", { pr: { ok: false, error: "boom" } }],
+  ];
+  for (const [name, overrides] of runs) {
+    const { result, calls } = await simulate(args, happy(overrides));
+    assert.equal(Object.keys(result)[0], "host", name);
+    assert.equal(result.host, HOST_NOTE, name);
+    assert.equal(result.stopped === true, name !== "success", name);
+    for (const c of calls) assert.ok(!c.task.includes(HOST_NOTE), `${name}: ${c.key}`);
+  }
+  assert.ok(loadScript().includes(`const HOST_NOTE = ${JSON.stringify(HOST_NOTE)};`), "the script's copy of HOST_NOTE matches src/launcher.ts");
 });

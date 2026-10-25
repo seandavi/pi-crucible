@@ -76,7 +76,7 @@ rebasing anything already pushed.
 
 ## Merging
 
-A person merges, never pi-crucible. The bar is green CI and the PR's checklist.
+A person merges, never pi-crucible or the session that launched the run (see "The host session" in [docs/crucible.md](docs/crucible.md)). The bar is green CI and the PR's checklist.
 
 ## License
 

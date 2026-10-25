@@ -8,6 +8,7 @@ import { engineConfigErrors, crucibleFileErrors } from "../src/config.ts";
 import {
   ensureWorktree,
   findIssueBranch,
+  HOST_NOTE,
   labelProblems,
   parseCommand,
   pickLenses,
@@ -245,9 +246,10 @@ test("ensureWorktree creates a branch from origin/main, or reuses what exists", 
   await assert.rejects(ensureWorktree(s.exec, plan("implement"), async () => false), /--start-at implement needs an existing branch issue-4-x/);
 });
 
-test("/crucible prepares the worktree and launches the named resource over RPC", async () => {
+/** A temp repo with a config on disk, and a fakePi whose git and gh answers cover one /crucible launch of issue 4. */
+async function launchFixture() {
   const repo = mkdtempSync(path.join(tmpdir(), "pi-crucible-"));
-  const { pi, commands, emitted } = fakePi(({ cmd, args }) => {
+  const fake = fakePi(({ cmd, args }) => {
     const line = `${cmd} ${args.join(" ")}`;
     if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
     if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
@@ -264,23 +266,34 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
   const { mkdirSync, writeFileSync } = await import("node:fs");
   mkdirSync(path.join(repo, ".pi"));
   writeFileSync(path.join(repo, ".pi", "crucible.json"), JSON.stringify(crucibleFile));
-  extension(pi as never);
+  extension(fake.pi as never);
+  const notes: [string, string][] = [];
+  const ctx = { cwd: repo, ui: { notify: (m: string, level: string) => notes.push([level, m]) } };
+  return { repo, ...fake, notes, ctx };
+}
+
+test("/crucible prepares the worktree and launches the named resource over RPC", async () => {
+  const { repo, pi, commands, emitted, messages, notes, ctx } = await launchFixture();
+  let messagesAtSpawn = -1;
   pi.events.on("subagents:rpc:v1:request", (req) => {
     const { requestId, method, params } = req as { requestId: string; method: string; params: Record<string, unknown> };
+    messagesAtSpawn = messages.length;
     assert.equal(method, "spawn");
     assert.equal(params.workflow, "pi-crucible");
     assert.equal(params.cwd, repo);
     assert.deepEqual(argErrors(params.args as Record<string, unknown>), []);
     pi.events.emit(`subagents:rpc:v1:reply:${requestId}`, { version: 1, requestId, success: true, data: { details: { asyncId: "run-42" } } });
   });
-  const notes: [string, string][] = [];
-  const ctx = { cwd: repo, ui: { notify: (m: string, level: string) => notes.push([level, m]) } };
 
   await commands.crucible.handler("4", ctx);
   assert.deepEqual(notes.map(([l]) => l), ["info", "info"], JSON.stringify(notes));
   assert.match(notes[0][1], /new branch issue-4-diff-for-reviewers from origin\/main/);
   assert.match(notes[1][1], /Crucible launched for #4 \(code\): run run-42/);
   assert.equal(emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length, 1);
+  assert.equal(messagesAtSpawn, 0, "the host is told after the spawn request");
+  assert.deepEqual(messages, [
+    { message: { customType: "pi-crucible-host", content: HOST_NOTE, display: true }, options: { triggerTurn: false } },
+  ]);
 
   notes.length = 0;
   await commands.crucible.handler("4 --dry-run", ctx);
@@ -291,6 +304,18 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
   notes.length = 0;
   await commands.crucible.handler("", ctx);
   assert.deepEqual(notes, [["error", "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]"]]);
+  assert.equal(messages.length, 1, "a dry run and a usage error tell the session nothing");
+});
+
+test("a rejected spawn tells the session nothing", async () => {
+  const { pi, commands, messages, notes, ctx } = await launchFixture();
+  pi.events.on("subagents:rpc:v1:request", (req) => {
+    const { requestId } = req as { requestId: string };
+    pi.events.emit(`subagents:rpc:v1:reply:${requestId}`, { version: 1, requestId, success: false, error: { code: "unavailable", message: "no" } });
+  });
+  await commands.crucible.handler("4", ctx);
+  assert.deepEqual(messages, []);
+  assert.deepEqual(notes.at(-1), ["error", "/crucible: pi-subagents unavailable: no"]);
 });
 
 test("example configs and this repo's own config are valid; the schema file is current", () => {

@@ -16,6 +16,7 @@
 // parent: tracking issue; the follow-up issue is added to it as a sub-issue.
 // The caller creates `worktree` on `branch` before launching; every stage runs there.
 // Whenever the run stops for a person, the issue or PR gets the `needs:human` label.
+// Every result starts with `host`: a note to the session that launched the run that a person merges the PR.
 
 // Launched by name (the pi-crucible resource, as /crucible does), pi-subagents gives the args only to
 // the resource's resolve, which prepends them to this script as CRUCIBLE_ARGS. Launched by path, they
@@ -46,6 +47,10 @@ if (STAGES.indexOf(startAt) < 0) throw new Error(`startAt must be one of ${STAGE
 const stageRuns = (stage) => STAGES.indexOf(startAt) <= STAGES.indexOf(stage);
 const parent = input.parent || null;
 const NEEDS_HUMAN = "needs:human";
+// Told to the session that launched the run, first in every result: the completion wake prints the
+// return value to that session, and a host with standing "merge on green" instructions merged a
+// crucible PR once (#35). src/launcher.ts exports the same text as HOST_NOTE; keep them identical.
+const HOST_NOTE = "pi-crucible: a person reviews and merges this run's PR. Neither pi-crucible nor the session that launched the run merges it. When the run finishes, report its outcome in one line (the PR URL, or the stage it stopped at) and take no further action on the PR or the issue: do not merge, approve, push to, comment on, label or close them, and do not deploy. Standing instructions to merge PRs on green do not apply to crucible PRs. Only a request the user makes in this session after the run finishes overrides this.";
 const SEAM_NOTE = seam
   ? `\nThis change is a SHARED SEAM: later issues build on it${config.seamNote ? ` (${config.seamNote})` : ""}. Rate by blast
 radius, not by current reach: a defect every later caller would inherit or copy (a guard that can
@@ -182,7 +187,7 @@ if (stageRuns("spec")) {
   if (!spec.ok || specOut.status !== "ready") {
     const questions = (specOut.blocking_questions || []).map((q) => `- ${q}`).join("\n");
     const flag = await flagHuman("flag-spec", `Stage: spec. ${questions ? `Blocking questions:\n${questions}` : `Error: ${spec.error || "no structured output"}`}`);
-    return { stage: "spec", stopped: true, flagged: flag.ok, spec: specOut, error: spec.error || null };
+    return { host: HOST_NOTE, stage: "spec", stopped: true, flagged: flag.ok, spec: specOut, error: spec.error || null };
   }
 }
 
@@ -214,7 +219,7 @@ ${checkList}
   implOut = impl.structuredOutput || {};
   if (!impl.ok || implOut.status !== "done") {
     const flag = await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
-    return { stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || null };
+    return { host: HOST_NOTE, stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || null };
   }
 }
 
@@ -617,10 +622,11 @@ const prOut = pr.structuredOutput || {};
 if (!pr.ok || !prOut.pr_url) {
   const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
   const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
-  return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };
+  return { host: HOST_NOTE, stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };
 }
 
 return {
+  host: HOST_NOTE,
   issue,
   startAt,
   pr: prOut.pr_url || null,
