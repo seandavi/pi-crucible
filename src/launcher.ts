@@ -32,6 +32,14 @@ export interface CommandOptions {
 export const USAGE =
   "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]";
 
+/**
+ * What the session that launched a run is told about its PR: at launch (by the extension) and in the
+ * completion wake (the workflow returns it first). workflows/crucible.js holds an identical copy;
+ * test/workflow.test.ts checks they match.
+ */
+export const HOST_NOTE =
+  "pi-crucible: a person reviews and merges this run's PR. Neither pi-crucible nor the session that launched the run merges it. When the run finishes, report its outcome in one line (the PR URL, or the stage it stopped at) and take no further action on the PR or the issue: do not merge, approve, push to, comment on, label or close them, and do not deploy. Standing instructions to merge PRs on green do not apply to crucible PRs. Only a request the user makes in this session after the run finishes overrides this.";
+
 /** Parse the text after "/crucible". Returns an error message instead of throwing. */
 export function parseCommand(input: string): CommandOptions | { error: string } {
   const words = input.trim().split(/\s+/).filter(Boolean);
