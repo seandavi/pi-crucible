@@ -26,7 +26,7 @@ After this change:
    only when the pull-request workflows yield no check at all, and `init` says it fell back.
 
 For this repository, `init` would detect `test = npm test` and `check = npm run check` from
-`.github/workflows/ci.yml`, the two checks `.pi/crucible.json` has today.
+`.github/workflows/ci.yml`, the two checks `.pi/crucible.json` has today (and report `npm ci` as setup).
 
 ## Non-goals
 
@@ -184,7 +184,7 @@ GitHub runs a `run:` script with `bash -e`, so a multi-line script fails at its 
 Joining its lines with ` && ` gives the same result in the single-line form the workflow prompt
 lists (`  - <name>: <command>`, one line per check).
 
-1. Join continuation lines: replace every `/\\\r?\n[ \t]*/g` with a single space.
+1. Join continuation lines: replace every `/[ \t]*\\\r?\n[ \t]*/g` with a single space.
 2. Split on `/\r?\n/`, trim each line, and drop empty lines and lines starting with `#`.
 3. For each line, split it on the literal `&&` into segments (trimmed). Drop the segments that are
    setup (`isSetup`, below). When none are dropped, keep the line unchanged. When all are dropped,
@@ -350,7 +350,7 @@ completions and `--dry-run` semantics. `/crucible <issue>` is untouched.
       does no I/O.
 - [ ] Given this repository's `.github/workflows/ci.yml`, `checksFromWorkflows` returns
       `[{ name: "test", command: "npm test", from: ".github/workflows/ci.yml" }, { name: "check", command: "npm run check", from: ".github/workflows/ci.yml" }]`
-      and no skip lines.
+      and exactly one skip line, ``` `npm ci` in .github/workflows/ci.yml: setup ```.
 - [ ] Given a workflow with the bioc-registry step
       `run: npx tsc -p . --noEmit 2>&1 | grep -E '^src/' && exit 1 || exit 0`, the check's command is
       exactly that string. Its name is `tsc` when the step has no `name` and the slug of `name` when it has one.
@@ -397,7 +397,7 @@ real filesystem.
 
 1. *"this repository's CI gives test and check"*: read `.github/workflows/ci.yml` with
    `readFileSync` (repo files are fixtures, as `test/fixtures.ts` already reads files) and assert
-   the two checks and empty `skipped`.
+   the two checks and the single `npm ci … setup` skip line.
 2. *"the bioc-registry typecheck is copied verbatim"*: an inline workflow with `npm ci`, `npm test`
    and the `npx tsc … || exit 0` step, unnamed and named `Typecheck`. Assert the commands and the
    names `test`, `tsc` and `typecheck`.

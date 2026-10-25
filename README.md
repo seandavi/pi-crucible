@@ -150,6 +150,8 @@ merge.
   through `globalThis`, and a named resource receives its `args` only when resolved (pi-crucible
   inlines them into the script). See [docs/crucible.md](docs/crucible.md#installing).
 - **[pi](https://pi.dev)** hosts it (tested with pi 1.1 and 1.4).
+- **[yaml](https://eemeli.org/yaml/)** (ISC, by Eemeli Aro) parses CI workflows for
+  `/crucible init`'s check detection. pi-subagents already depends on it.
 - **Models:** by default `claude-bridge/claude-opus-5-5`, `-sonnet-5-5` and `-haiku-5-5` through
   [pi-claude-bridge](https://www.npmjs.com/package/pi-claude-bridge). Set `models` in the config to
   use any model pi can reach.

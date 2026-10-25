@@ -168,9 +168,16 @@ Checks: `npm test` (args validation and a registration round trip through pi-sub
 
 `init` creates the labels a run uses that the repository lacks: `needs:human` (every stop and every
 PR carries it; `/crucible` refuses to start without it), `seam`, and `review:<lens>` for each lens but
-`code`. It warns when there is no `AGENTS.md`. When no config exists, it detects checks from
-`package.json` scripts (`typecheck`, `lint`, `test`), `justfile` or `Makefile` recipes (`check`,
-`lint`, `test`) and `pyproject.toml` (pytest, ruff), and offers a starter `.pi/crucible.json` with
+`code`. It warns when there is no `AGENTS.md`. When no config exists, it detects checks from CI first: the `run:` steps of the workflows in
+`.github/workflows` that run on `pull_request`, in file, job and step order. It drops `uses:`
+steps and setup (`npm ci`, `pip install`, `uv sync`, …), joins a multi-line script's lines
+with `&&`, prefixes `cd <dir> &&` for a `working-directory`, and leaves out steps that only work
+inside Actions: `${{ }}` expressions, writes to `$GITHUB_ENV` and friends, a non-bash shell, or
+shell control flow across lines. It lists what it left out and why. Reusable workflows are not
+followed. Check names come from the step's `name`, else from the command (`npm run lint` →
+`lint`). Only when CI yields no check does it fall back to `package.json` scripts
+(`typecheck`, `lint`, `test`), `justfile` or `Makefile` recipes (`check`, `lint`, `test`) and
+`pyproject.toml` (pytest, ruff). It then offers a starter `.pi/crucible.json` with
 generic texts for `design`, `spec.design`, `implement` and the `code`, `security` and `ux` lenses.
 Edit those texts for the project (they make better runs) and merge the file to `main`. With no
 checks detected the config has none, and runs report "no checks configured".
