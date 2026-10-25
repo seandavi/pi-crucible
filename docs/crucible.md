@@ -184,6 +184,7 @@ From pi, anywhere inside the repository (its main checkout or any worktree):
 /crucible 12 --dry-run             # show the worktree, branch and args; change nothing
 /crucible 12 --start-at review     # re-review and re-integrate the existing branch, update its PR
 /crucible 12 --lens security       # add a lens the issue's labels do not ask for
+/crucible 12 --ignore-open-pr      # launch even though another branch has an open PR for #12
 ```
 
 `/crucible` fetches `origin` and reads `.pi/crucible.json` as `origin/main` has it, so the config
@@ -204,6 +205,14 @@ slug are used, so retitling an issue or making the branch by hand does not break
 such branches are an error that lists them. The repository should have the `needs:human` label (`/crucible` stops early with the `gh label create`
 command if it is missing; the stages also create it when they flag a stop, so hand launches are covered) and should have `seam` and
 `review:<lens>` for the lenses it defines (a warning if not).
+
+Before it launches, `/crucible` asks GitHub which open PRs would close the issue (a closing
+keyword such as `Fixes #12`, or a link in the issue's Development sidebar). An open PR from any
+branch other than the run's own means the run would open a second, competing PR. `--dry-run`
+warns and lists them. A real launch refuses, before it creates a worktree, unless you pass
+`--ignore-open-pr`, which launches with a warning. The run's own PR, from its `issue-<n>-<slug>`
+branch, never counts, so `--start-at review` still updates it. PRs that only mention the issue
+are not checked.
 
 Launching by hand still works, for scripts or other agents: pass the same args `/crucible --dry-run`
 prints. The validator holds hand launches to the names `/crucible` derives: `branch` must be
