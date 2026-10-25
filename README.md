@@ -70,7 +70,9 @@ Then, in pi, inside a repository:
 
 An `AGENTS.md` with the project's stack, layout, rules and commands matters more than anything in the
 config: every stage reads it first. The run works in its own git worktree, labels anything that needs
-you `needs:human`, and opens a PR you review and merge. Your queue is `gh issue list -l needs:human`
+you `needs:human`, and opens a PR you review and merge.
+It never merges, and it tells the pi session that launched the run not to either, since that session
+wakes when the run finishes (see "The host session" in [docs/crucible.md](docs/crucible.md)). Your queue is `gh issue list -l needs:human`
 and `gh pr list -l needs:human`.
 
 The package tracks `main`; `pi update --extensions` brings in the latest.
