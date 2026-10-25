@@ -6,7 +6,10 @@ import path from "node:path";
 import extension from "../extensions/crucible.ts";
 import { engineConfigErrors, crucibleFileErrors } from "../src/config.ts";
 import {
+  LINKED_PRS_QUERY,
+  competingPrCheck,
   ensureWorktree,
+  findCompetingPrs,
   findIssueBranch,
   labelProblems,
   parseCommand,
@@ -17,6 +20,7 @@ import {
   slugify,
   worktreeRootFor,
   type Exec,
+  type LinkedPr,
   type Plan,
 } from "../src/launcher.ts";
 import { argErrors } from "../src/resource.ts";
@@ -24,10 +28,11 @@ import { schemaText, SCHEMA_PATH } from "../scripts/write-schema.ts";
 import { crucibleFile, fakePi, readJson, type ExecCall } from "./fixtures.ts";
 
 test("parseCommand reads the issue and options, and explains mistakes", () => {
-  assert.deepEqual(parseCommand("12"), { issue: 12, startAt: "spec", lenses: [], dryRun: false });
+  assert.deepEqual(parseCommand("12"), { issue: 12, startAt: "spec", lenses: [], ignoreOpenPr: false, dryRun: false });
   assert.deepEqual(parseCommand("#12 --start-at review --lens ux --lens=security --dry-run"), {
-    issue: 12, startAt: "review", lenses: ["ux", "security"], dryRun: true,
+    issue: 12, startAt: "review", lenses: ["ux", "security"], ignoreOpenPr: false, dryRun: true,
   });
+  assert.deepEqual(parseCommand("12 --ignore-open-pr --dry-run"), { issue: 12, startAt: "spec", lenses: [], ignoreOpenPr: true, dryRun: true });
   assert.match((parseCommand("") as { error: string }).error, /^Usage: \/crucible <issue>/);
   assert.match((parseCommand("12 --start-at pr") as { error: string }).error, /--start-at must be one of spec, implement, review/);
   assert.match((parseCommand("12 --lens") as { error: string }).error, /--lens needs a value/);
@@ -62,7 +67,7 @@ test("worktree roots and repos resolve as documented", () => {
 });
 
 const issue = { number: 4, title: "Reviewers always get the diff", state: "OPEN", labels: ["review:ux", "seam"] };
-const options = { issue: 4, startAt: "spec" as const, lenses: [], dryRun: false };
+const options = { issue: 4, startAt: "spec" as const, lenses: [], ignoreOpenPr: false, dryRun: false };
 
 test("planLaunch builds args the resource accepts", () => {
   const plan = planLaunch({ file: crucibleFile, repoRoot: "/src/pi-crucible", repo: "seandavi/pi-crucible", issue, options, engine: { commit: "abc1234" }, configSource: "test" });
@@ -93,12 +98,19 @@ function scripted(rules: [RegExp, { stdout?: string; code?: number; stderr?: str
 
 const MAIN_SHA = "fedcba9876543210fedcba9876543210fedcba98";
 
-const repoRules = (state = "OPEN", extra: [RegExp, { stdout?: string; code?: number }][] = []): [RegExp, { stdout?: string; code?: number }][] => [
+const linkedPrs = (...nodes: Partial<LinkedPr>[]) =>
+  JSON.stringify({ data: { repository: { issue: { closedByPullRequestsReferences: { nodes: nodes.map((n) => ({
+    number: 74, url: "https://github.com/seandavi/pi-crucible/pull/74", state: "OPEN", headRefName: "seed-replace",
+    isCrossRepository: false, repository: { nameWithOwner: "seandavi/pi-crucible" }, ...n,
+  })) } } } } });
+
+const repoRules = (state = "OPEN", extra: [RegExp, { stdout?: string; code?: number; stderr?: string }][] = []): [RegExp, { stdout?: string; code?: number; stderr?: string }][] => [
   ...extra,
   [/^git rev-parse --path-format=absolute --git-common-dir$/, { stdout: "/src/pi-crucible/.git\n" }],
   [/^git remote get-url origin$/, { stdout: "git@github.com:seandavi/pi-crucible.git\n" }],
   [/^gh issue view 4 -R seandavi\/pi-crucible/, { stdout: JSON.stringify({ number: 4, title: issue.title, state, labels: [{ name: "seam" }] }) }],
   [/^gh label list -R seandavi\/pi-crucible/, { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) }],
+  [/^gh api graphql /, { stdout: linkedPrs() }],
   [/^git fetch origin$/, {}],
   [/^git rev-parse --verify --quiet refs\/remotes\/origin\/main$/, { stdout: MAIN_SHA + "\n" }],
   [/^git cat-file -e fedcba9.*:\.pi\/crucible\.json$/, {}],
@@ -224,6 +236,67 @@ test("a failed fetch is a warning, not a stop", async () => {
   assert.match(plan.warnings[0], /could not fetch origin .*offline.*the config and the branch lookup used local refs/);
 });
 
+test("findCompetingPrs keeps open PRs from other branches and drops the run's own", async () => {
+  const s = scripted([[/^gh api graphql /, { stdout: linkedPrs(
+    { number: 74 },
+    { number: 75, state: "MERGED", headRefName: "other" },
+    { number: 76, state: "CLOSED", headRefName: "other2" },
+    { number: 77, headRefName: "issue-4-x" },
+    { number: 78, headRefName: "issue-4-x", isCrossRepository: true },
+    { number: 79, headRefName: "issue-4-x", repository: { nameWithOwner: "someone/else" } },
+    { number: 80, headRefName: "issue-4-x", repository: { nameWithOwner: "SeanDavi/Pi-Crucible" } },
+  ) }]]);
+  const prs = await findCompetingPrs(s.exec, "seandavi/pi-crucible", 4, "issue-4-x");
+  assert.deepEqual(prs.map((p) => p.number), [74, 78, 79]);
+  assert.equal(s.calls.length, 1);
+  assert.deepEqual(s.calls[0].args, ["api", "graphql", "-f", `query=${LINKED_PRS_QUERY}`, "-f", "owner=seandavi", "-f", "name=pi-crucible", "-F", "number=4"]);
+});
+
+test("competingPrCheck refuses a real launch and warns otherwise", () => {
+  const plain = { number: 74, url: "https://github.com/o/r/pull/74", state: "OPEN", headRefName: "seed", isCrossRepository: false, repository: { nameWithOwner: "o/r" } };
+  const fork = { ...plain, number: 75, url: "https://github.com/o/r/pull/75", headRefName: "fix", isCrossRepository: true };
+  const head = "o/r#4 already has an open PR from another branch: https://github.com/o/r/pull/74 (branch seed), https://github.com/o/r/pull/75 (branch fix on a fork).";
+  assert.deepEqual(competingPrCheck("o/r", 4, [plain, fork], { dryRun: false, ignoreOpenPr: false }), {
+    errors: [`${head} A run would open a second, competing PR. Close or merge that PR first, or pass --ignore-open-pr to launch anyway.`],
+    warnings: [],
+  });
+  assert.deepEqual(competingPrCheck("o/r", 4, [], { dryRun: false, ignoreOpenPr: false }), { errors: [], warnings: [] });
+  assert.deepEqual(competingPrCheck("o/r", 4, [plain, fork], { dryRun: true, ignoreOpenPr: false }), {
+    errors: [],
+    warnings: [`${head} A real launch refuses unless you pass --ignore-open-pr.`],
+  });
+  const ignored = { errors: [], warnings: [`${head} --ignore-open-pr: launching anyway, so the issue will have a second PR.`] };
+  assert.deepEqual(competingPrCheck("o/r", 4, [plain, fork], { dryRun: false, ignoreOpenPr: true }), ignored);
+  assert.deepEqual(competingPrCheck("o/r", 4, [plain, fork], { dryRun: true, ignoreOpenPr: true }), ignored);
+});
+
+test("prepare stops for an open PR from another branch unless asked not to", async () => {
+  const read = async () => JSON.stringify(crucibleFile);
+  const competing: [RegExp, { stdout?: string }] = [/^gh api graphql /, { stdout: linkedPrs({}) }];
+  const refused = /seandavi\/pi-crucible#4 already has an open PR from another branch: https:\/\/github\.com\/seandavi\/pi-crucible\/pull\/74 \(branch seed-replace\)\. A run would open a second, competing PR/;
+  await assert.rejects(prepare(scripted(repoRules("OPEN", [competing])).exec, "/x", options, read), refused);
+  const byHand: [RegExp, { stdout?: string }] = [/^git for-each-ref /, { stdout: "refs/heads/issue-4-by-hand\n" }];
+  await assert.rejects(prepare(scripted(repoRules("OPEN", [competing, byHand])).exec, "/x", { ...options, startAt: "review" }, read), refused);
+
+  const dry = await prepare(scripted(repoRules("OPEN", [competing])).exec, "/x", { ...options, dryRun: true }, read);
+  assert.ok(dry.warnings.at(-1)?.endsWith("A real launch refuses unless you pass --ignore-open-pr."), dry.warnings.join());
+  const ignored = await prepare(scripted(repoRules("OPEN", [competing])).exec, "/x", { ...options, ignoreOpenPr: true }, read);
+  assert.ok(ignored.warnings.at(-1)?.endsWith("--ignore-open-pr: launching anyway, so the issue will have a second PR."), ignored.warnings.join());
+
+  const own: [RegExp, { stdout?: string }] = [/^gh api graphql /, { stdout: linkedPrs({ headRefName: "issue-4-reviewers-always-get-the-diff" }) }];
+  const s = scripted(repoRules("OPEN", [own]));
+  const plan = await prepare(s.exec, "/x", options, read);
+  assert.ok(!plan.warnings.some((w) => w.includes("open PR")), plan.warnings.join());
+  const lines = s.lines();
+  const graphql = lines.findIndex((l) => l.startsWith("gh api graphql"));
+  assert.ok(graphql > lines.findIndex((l) => l.startsWith("git for-each-ref")) && graphql > 0, lines.join("\n"));
+
+  await assert.rejects(
+    prepare(scripted(repoRules("OPEN", [[/^gh api graphql /, { code: 1, stderr: "HTTP 401" }]])).exec, "/x", options, read),
+    /gh api graphql .* failed: HTTP 401/,
+  );
+});
+
 const plan = (startAt: Plan["startAt"] = "spec"): Plan => ({
   repoRoot: "/src/r", worktree: "/src/r-worktrees/issue-4", branch: "issue-4-x", startAt, configSource: "test", args: {}, warnings: [],
 });
@@ -253,6 +326,7 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
     if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
     if (line.startsWith("gh issue view")) return { stdout: JSON.stringify({ number: 4, title: "Diff for reviewers", state: "OPEN", labels: [] }) };
     if (line.startsWith("gh label list")) return { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) };
+    if (line.startsWith("gh api graphql")) return { stdout: linkedPrs() };
     if (line.includes("rev-parse HEAD")) return { stdout: "abcdef1" };
     if (line.includes("refs/remotes/origin/main")) return { stdout: "0123456789abcdef0123456789abcdef01234567" };
     if (line.startsWith("git cat-file -e")) return {};
@@ -290,7 +364,54 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
 
   notes.length = 0;
   await commands.crucible.handler("", ctx);
-  assert.deepEqual(notes, [["error", "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]"]]);
+  assert.deepEqual(notes, [["error", "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--ignore-open-pr] [--dry-run]"]]);
+});
+
+test("/crucible refuses a launch that would compete with an open PR", async () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "pi-crucible-"));
+  const { pi, commands, emitted, execCalls } = fakePi(({ cmd, args }) => {
+    const line = `${cmd} ${args.join(" ")}`;
+    if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
+    if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
+    if (line.startsWith("gh issue view")) return { stdout: JSON.stringify({ number: 4, title: "Diff for reviewers", state: "OPEN", labels: [] }) };
+    if (line.startsWith("gh label list")) return { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) };
+    if (line.startsWith("gh api graphql")) return { stdout: linkedPrs({ url: "https://github.com/seandavi/pi-crucible/pull/74" }) };
+    if (line.includes("rev-parse HEAD")) return { stdout: "abcdef1" };
+    if (line.includes("refs/remotes/origin/main")) return { stdout: "0123456789abcdef0123456789abcdef01234567" };
+    if (line.startsWith("git cat-file -e")) return {};
+    if (line.startsWith("git cat-file blob")) return { stdout: JSON.stringify(crucibleFile) };
+    if (line.includes("--verify --quiet")) return { code: 1 };
+    return {};
+  });
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  mkdirSync(path.join(repo, ".pi"));
+  writeFileSync(path.join(repo, ".pi", "crucible.json"), JSON.stringify(crucibleFile));
+  extension(pi as never);
+  pi.events.on("subagents:rpc:v1:request", (req) => {
+    const { requestId } = req as { requestId: string };
+    pi.events.emit(`subagents:rpc:v1:reply:${requestId}`, { version: 1, requestId, success: true, data: { details: { asyncId: "run-42" } } });
+  });
+  const notes: [string, string][] = [];
+  const ctx = { cwd: repo, ui: { notify: (m: string, level: string) => notes.push([level, m]) } };
+  const requests = () => emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length;
+
+  await commands.crucible.handler("4", ctx);
+  assert.equal(notes.length, 1, JSON.stringify(notes));
+  assert.equal(notes[0][0], "error");
+  assert.ok(notes[0][1].startsWith("/crucible: seandavi/pi-crucible#4 already has an open PR from another branch:"), notes[0][1]);
+  assert.ok(!execCalls.some((c) => `${c.cmd} ${c.args.join(" ")}`.startsWith("git worktree add")), "no worktree for a refused launch");
+  assert.equal(requests(), 0);
+
+  notes.length = 0;
+  await commands.crucible.handler("4 --dry-run", ctx);
+  assert.deepEqual(notes.map(([l]) => l), ["warning", "info"], JSON.stringify(notes));
+  assert.ok(notes[0][1].endsWith("A real launch refuses unless you pass --ignore-open-pr."), notes[0][1]);
+  assert.equal(requests(), 0);
+
+  notes.length = 0;
+  await commands.crucible.handler("4 --ignore-open-pr", ctx);
+  assert.deepEqual(notes.map(([l]) => l), ["warning", "info", "info"], JSON.stringify(notes));
+  assert.equal(requests(), 1);
 });
 
 test("example configs and this repo's own config are valid; the schema file is current", () => {
