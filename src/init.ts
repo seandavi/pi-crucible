@@ -2,7 +2,9 @@
 //
 //   - creates the labels a run uses that the repository lacks (a GitHub write, so it is explicit
 //     here and never a side effect of a run);
-//   - warns when AGENTS.md is missing (every stage reads it first);
+//   - when AGENTS.md is missing (every stage reads it first, and only it), names the agent and
+//     contributor docs it found and prints a starter AGENTS.md that points to them, or writes it
+//     with --write;
 //   - detects check commands from package.json, justfile, pyproject.toml and Makefile;
 //   - when there is no config yet, prints a starter .pi/crucible.json, or writes it with --write.
 //
@@ -45,6 +47,20 @@ export const GENERIC = {
     ux: "UX review, for whoever uses this change: names, defaults and error messages that say what to do next; docs and examples a first-time user can follow.",
   },
 };
+
+/**
+ * Agent and contributor docs a repository may have instead of AGENTS.md, in the order a starter
+ * AGENTS.md lists them. Runs read only AGENTS.md, so these reach a run only through it.
+ */
+export const AGENT_DOCS = [
+  "CLAUDE.md",
+  ".claude/CLAUDE.md",
+  "GEMINI.md",
+  ".github/copilot-instructions.md",
+  "CONTRIBUTING.md",
+  ".github/CONTRIBUTING.md",
+  "docs/CONTRIBUTING.md",
+];
 
 export interface Check {
   name: string;
@@ -103,6 +119,34 @@ export function starterConfig(checks: Check[]): CrucibleFile {
   };
 }
 
+/** A starter AGENTS.md: read the docs the repository already has, then sections to fill in. */
+export function starterAgentsMd(docs: string[], checks: { name: string; command: string }[]): string {
+  const lines = [
+    "# AGENTS.md",
+    "",
+    "Started by `/crucible init`. Every pi-crucible stage reads this file first, and only this file:",
+    "fill in the sections below, and move the rules that matter most into them.",
+    "",
+  ];
+  if (docs.length) {
+    lines.push("## Read first", "", "Read these before changing anything, and follow them:", "", ...docs.map((d) => `- [${d}](${d})`), "");
+  }
+  lines.push(
+    "## Stack and layout",
+    "",
+    "<!-- Languages, frameworks, and where the code, tests and docs live. -->",
+    "",
+    "## Rules",
+    "",
+    "<!-- Hard rules: files that must change together, things never to do. -->",
+    "",
+    "## Commands",
+    "",
+    ...(checks.length ? checks.map((c) => `- ${c.name}: \`${c.command}\``) : ["<!-- How to set up, test and lint. -->"]),
+  );
+  return lines.join("\n") + "\n";
+}
+
 /** Labels a run uses: needs:human on every stop and PR, seam, and review:<lens> for each lens but code. */
 export function wantedLabels(lenses: string[]): { name: string; color: string; description: string }[] {
   return [
@@ -155,8 +199,17 @@ export async function init(io: InitIO, cwd: string, options: InitOptions): Promi
   const repo = config?.repo ?? repoFromRemote(await out(io.exec, "git", ["remote", "get-url", "origin"], repoRoot).catch(() => ""));
   if (!repo) throw new Error('cannot tell the GitHub repo from the origin remote; set "repo" in .pi/crucible.json');
 
-  if ((await read("AGENTS.md")) === undefined) {
-    notes.push(["warning", "No AGENTS.md: every stage reads it first, and runs are much worse without one. Add the project's stack, layout, rules and commands."]);
+  // Runs read only AGENTS.md; other agent docs reach a run only if it points to them.
+  const hasAgentsMd = (await read("AGENTS.md")) !== undefined;
+  const agentDocs: string[] = [];
+  if (!hasAgentsMd) {
+    for (const doc of AGENT_DOCS) if ((await read(doc)) !== undefined) agentDocs.push(doc);
+    notes.push([
+      "warning",
+      agentDocs.length
+        ? `No AGENTS.md: every stage reads it first, and only it. Found ${agentDocs.join(", ")}, which runs will not read unless AGENTS.md points to them. Start one from them with /crucible init --write.`
+        : "No AGENTS.md: every stage reads it first, and runs are much worse without one. Start one with /crucible init --write, then add the project's stack, layout, rules and commands.",
+    ]);
   }
 
   // Labels.
@@ -179,25 +232,43 @@ export async function init(io: InitIO, cwd: string, options: InitOptions): Promi
   ]);
 
   // Config.
+  let checks: { name: string; command: string }[] = [];
   if (config) {
+    checks = Array.isArray(config.checks)
+      ? config.checks.filter((c) => typeof c?.name === "string" && typeof c?.command === "string")
+      : [];
     notes.push(["info", `Config: ${configName} exists; not changing it.${configName !== CONFIG_NAMES[0] ? ` Rename it to ${CONFIG_NAMES[0]}.` : ""}`]);
   } else {
     const files: Record<string, string | undefined> = {};
     for (const f of ["package.json", "justfile", "Justfile", "pyproject.toml", "Makefile"]) files[f] = await read(f);
-    const checks = detectChecks(files);
+    const detected = detectChecks(files);
+    checks = detected;
     notes.push([
-      checks.length ? "info" : "warning",
-      checks.length
-        ? `Detected checks: ${checks.map((c) => `${c.name} = \`${c.command}\` (${c.from})`).join("; ")}`
+      detected.length ? "info" : "warning",
+      detected.length
+        ? `Detected checks: ${detected.map((c) => `${c.name} = \`${c.command}\` (${c.from})`).join("; ")}`
         : "No checks detected (package.json scripts, justfile or Makefile recipes, pytest/ruff in pyproject.toml). Runs will report \"no checks configured\"; add checks to the config.",
     ]);
-    const text = JSON.stringify(starterConfig(checks), null, 2) + "\n";
+    const text = JSON.stringify(starterConfig(detected), null, 2) + "\n";
     const target = path.join(repoRoot, CONFIG_NAMES[0]);
     if (options.write && !options.dryRun) {
       await io.writeText(target, text);
       notes.push(["info", `Wrote ${target}. Edit the generic texts for this project, then merge it to main: runs read it from origin/main.`]);
     } else {
       notes.push(["info", `Starter ${CONFIG_NAMES[0]} (write it with /crucible init --write):\n${text}`]);
+    }
+  }
+  if (!hasAgentsMd) {
+    const text = starterAgentsMd(agentDocs, checks);
+    const target = path.join(repoRoot, "AGENTS.md");
+    if (options.write && !options.dryRun) {
+      await io.writeText(target, text);
+      notes.push([
+        "info",
+        `Wrote ${target}${agentDocs.length ? `, pointing to ${agentDocs.join(", ")}` : ""}. Fill in its sections, then merge it to main: runs work from branches of origin/main.`,
+      ]);
+    } else {
+      notes.push(["info", `Starter AGENTS.md (write it with /crucible init --write):\n${text}`]);
     }
   }
   notes.push(["info", "Next: /crucible <issue> --dry-run"]);
