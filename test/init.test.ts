@@ -54,8 +54,14 @@ function fakeRepo(files: Record<string, string>, labels: string[]) {
     if (rel in files) return files[rel];
     throw new Error("ENOENT");
   };
+  const listDir = async (p: string) => {
+    const prefix = `${p.replace(/^\/r\//, "")}/`;
+    const names = Object.keys(files).filter((f) => f.startsWith(prefix) && !f.slice(prefix.length).includes("/")).map((f) => f.slice(prefix.length));
+    if (!names.length) throw new Error("ENOENT");
+    return names;
+  };
   const writeText = async (p: string, text: string) => void (written[p] = text);
-  return { io: { exec, readText, writeText }, calls, written };
+  return { io: { exec, readText, listDir, writeText }, calls, written };
 }
 
 test("init in a fresh repo creates labels, warns about AGENTS.md, and writes a starter config", async () => {
@@ -85,4 +91,39 @@ test("init --dry-run changes nothing; an existing config is left alone and decid
   assert.deepEqual(has.calls.filter((c) => c.startsWith("gh label create")).map((c) => c.split(" ")[3]), ["review:privacy"]);
   assert.deepEqual(has.written, {});
   assert.match(notes2.map((n) => n[1]).join("\n"), /\.pi\/factory\.json exists; not changing it\. Rename it to \.pi\/crucible\.json\./);
+});
+
+test("init prefers CI checks to package.json", async () => {
+  const workflow = "on: pull_request\njobs:\n  t:\n    steps:\n      - uses: actions/checkout@v7\n      - run: npm ci\n      - run: npm test\n";
+  const repo = fakeRepo(
+    {
+      "AGENTS.md": "x",
+      "package.json": JSON.stringify({ scripts: { test: "node --test", lint: "eslint ." } }),
+      ".github/workflows/ci.yml": workflow,
+    },
+    [],
+  );
+  const notes = await init(repo.io, "/r", { write: true, dryRun: false });
+  const text = notes.map((n) => n[1]).join("\n");
+  const config = JSON.parse(repo.written["/r/.pi/crucible.json"]);
+  assert.deepEqual(config.checks, [{ name: "test", command: "npm test" }]);
+  assert.match(text, /Detected checks: test = `npm test` \(\.github\/workflows\/ci\.yml\)/);
+  assert.match(text, /Not offered as checks from CI:\n- `npm ci` in \.github\/workflows\/ci\.yml: setup/);
+  assert.doesNotMatch(text, /npm run lint/);
+  assert.doesNotMatch(text, /instead/);
+});
+
+test("init falls back to package.json when CI has no pull_request workflow", async () => {
+  const repo = fakeRepo(
+    {
+      "AGENTS.md": "x",
+      "package.json": JSON.stringify({ scripts: { test: "node --test" } }),
+      ".github/workflows/release.yml": "on: push\njobs:\n  r:\n    steps:\n      - run: npm publish\n",
+    },
+    [],
+  );
+  const text = (await init(repo.io, "/r", { write: false, dryRun: false })).map((n) => n[1]).join("\n");
+  assert.match(text, /No checks in pull_request workflows under \.github\/workflows; detected from package\.json/);
+  assert.match(text, /Detected checks: test = `npm test` \(package\.json\)/);
+  assert.doesNotMatch(text, /npm publish/);
 });

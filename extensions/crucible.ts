@@ -10,7 +10,7 @@
 // edits after /reload.
 
 import { randomUUID } from "node:crypto";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
@@ -130,6 +130,7 @@ export default function (pi: ExtensionAPI) {
         {
           exec: (cmd, args, o) => pi.exec(cmd, args, o),
           readText: (p) => readFile(p, "utf8"),
+          listDir: (p) => readdir(p),
           writeText: async (p, text) => {
             await mkdir(path.dirname(p), { recursive: true });
             await writeFile(p, text, { flag: "wx" }); // never overwrite an existing config
