@@ -161,18 +161,24 @@ Checks: `npm test` (args validation and a registration round trip through pi-sub
 ## First run in a new repository
 
 ```text
-/crucible init               # labels, AGENTS.md check, detected checks, starter config (printed)
-/crucible init --write       # also write .pi/crucible.json (never overwrites an existing one)
+/crucible init               # labels, AGENTS.md check, detected checks, starter config and AGENTS.md (printed)
+/crucible init --write       # also write .pi/crucible.json and AGENTS.md (never overwrites either)
 /crucible init --dry-run     # report only: create nothing
 ```
 
 `init` creates the labels a run uses that the repository lacks: `needs:human` (every stop and every
 PR carries it; `/crucible` refuses to start without it), `seam`, and `review:<lens>` for each lens but
-`code`. It warns when there is no `AGENTS.md`. When no config exists, it detects checks from
+`code`. When there is no `AGENTS.md`, it names the agent and contributor docs it finds (`CLAUDE.md`,
+`.claude/CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, and `CONTRIBUTING.md` in the
+root, `.github/` or `docs/`) and offers a starter `AGENTS.md` that tells every stage to read them
+first, with sections to fill in for the stack and layout and the rules, and the checks as its
+commands. Runs read only `AGENTS.md`, so a rule that lives only in `CLAUDE.md` reaches a run only
+through it. The starter links to those files rather than copying them; move the rules that matter
+most into `AGENTS.md` itself. When no config exists, it detects checks from
 `package.json` scripts (`typecheck`, `lint`, `test`), `justfile` or `Makefile` recipes (`check`,
 `lint`, `test`) and `pyproject.toml` (pytest, ruff), and offers a starter `.pi/crucible.json` with
 generic texts for `design`, `spec.design`, `implement` and the `code`, `security` and `ux` lenses.
-Edit those texts for the project (they make better runs) and merge the file to `main`. With no
+Edit those texts, and the starter `AGENTS.md`, for the project (they make better runs) and merge both to `main`. With no
 checks detected the config has none, and runs report "no checks configured".
 
 ## Running it
