@@ -30,6 +30,9 @@ const STAGES = ["spec", "implement", "review"];
 // The worktree path is written into commands the stages run; spaces are fine (it is single-quoted there).
 const UNSAFE_PATH_CHARS = /[\x00-\x1f\x7f`$\\"';|&<>(){}*?!~]/;
 
+/** A GitHub user login, as the spec stage's comment filter compares it (bots and "app/..." do not match). */
+export const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
 const isPositiveInt = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 const str: Check = (v) => (typeof v === "string" && v.trim() ? null : "must be a non-empty string");
 
@@ -85,6 +88,10 @@ const FIELDS: Record<string, { required: boolean; check: Check }> = {
       return ok ? null : "must be { commit: <git sha>, dirty?: boolean }";
     },
   },
+  issueAuthor: {
+    required: false,
+    check: (v) => (typeof v === "string" && GITHUB_LOGIN.test(v) ? null : "must be a GitHub login"),
+  },
 };
 
 /** Every problem with `args`, as messages an agent can act on; empty when the args are valid. */
@@ -103,7 +110,9 @@ export function argErrors(args: Args): string[] {
   }
   if (!errors.length) {
     const defined = (args.config as { lenses: Record<string, string> }).lenses;
-    const lenses = ["code", ...((args.lenses as string[] | undefined) ?? [])];
+    const named = (args.lenses as string[] | undefined) ?? [];
+    if (named.includes("blind")) errors.push('arg "lenses" may not name "blind": the engine runs it on every issue');
+    const lenses = ["code", ...named.filter((l) => l !== "blind")];
     const missing = lenses.filter((l) => !defined[l]);
     if (missing.length) errors.push(`no lens text in config.lenses for: ${missing.join(", ")}`);
     // This validator is the only guard for hand launches. Pin the names the launcher derives, so

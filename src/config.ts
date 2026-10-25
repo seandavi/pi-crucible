@@ -49,8 +49,18 @@ export const EngineConfig = Type.Object(
       additionalProperties: false,
       minProperties: 1,
       maxProperties: 8,
-      description: "Review lenses by name. `code` must be defined; label `review:<name>` adds a lens to a run.",
+      description: "Review lenses by name. `code` must be defined; label `review:<name>` adds a lens to a run. `blind` is reserved for the engine's own lens.",
     }),
+    sensitivePaths: Type.Optional(
+      Type.Array(
+        Type.String({ minLength: 1, maxLength: 200, pattern: "^[^/\\x00-\\x1f\\x7f][^\\x00-\\x1f\\x7f]*$" }),
+        {
+          maxItems: 32,
+          description:
+            'Path globs (repo-relative; * and ? within a segment, ** across segments, a trailing / for a whole directory, no / to match a file name anywhere) whose change a person must always review, added to the engine\'s defaults (CI, agent instructions, dependency manifests and lockfiles). A PR that touches one opens with a "Sensitive paths touched" section, and the issue is labelled needs:human.',
+        },
+      ),
+    ),
     skills: Type.Optional(
       Type.Object(
         {
@@ -124,6 +134,7 @@ function errors(schema: Parameters<typeof Value.Errors>[0], value: unknown, extr
 function engineRules(c: EngineConfig): string[] {
   const out: string[] = [];
   if (!c.lenses.code) out.push('/lenses: must define the "code" lens');
+  if (c.lenses.blind) out.push('/lenses/blind: "blind" is the engine\'s built-in lens; use another name');
   for (const lens of Object.keys(c.skills?.lenses ?? {})) {
     if (!c.lenses[lens]) out.push(`/skills/lenses/${lens}: no such lens`);
   }
