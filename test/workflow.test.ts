@@ -101,7 +101,7 @@ test("the checks the PR reports are the integration's", async () => {
   assert.equal(fails.result.integration.status, "fail");
 });
 
-test("blocker findings trigger revise and a re-review by that lens only", async () => {
+test("blocker findings trigger revise and a re-review by that lens and the blind lens", async () => {
   let round = 0;
   const { calls, task } = await simulate(args, (key, opts) => {
     if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts", problem: "p", fix: "f" }] } };
@@ -109,7 +109,7 @@ test("blocker findings trigger revise and a re-review by that lens only", async 
     return happy()(key);
   });
   assert.equal(round, 1);
-  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "review-blind-r0", "revise-r1", "diff-r1", "review-code-r1", "integrate", "pr"]);
+  assert.deepEqual(calls.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "review-blind-r0", "revise-r1", "diff-r1", "review-code-r1", "review-blind-r1", "integrate", "pr"]);
   assert.match(task("revise-r1"), /- test: npm test/);
 });
 
@@ -198,7 +198,7 @@ test("before each review round a Haiku worker writes an ignored diff file", asyn
   assert.ok(task("diff-r0").includes(`git -C '/tmp/repo-worktrees/issue-2' diff --no-color --no-ext-diff origin/main...HEAD >> '${dir}/r0.diff'\n`));
   assert.ok(task("diff-r0").includes(`mkdir -p '${dir}'\n`));
   assert.ok(task("diff-r0").includes(`wc -l < '${dir}/r0.diff'\n`));
-  assert.ok(task("diff-r0").includes("git -C '/tmp/repo-worktrees/issue-2' diff --name-only origin/main...HEAD\n"));
+  assert.ok(task("diff-r0").includes("git -C '/tmp/repo-worktrees/issue-2' -c core.quotePath=false diff --name-only --no-renames origin/main...HEAD\n"));
   const at = (k: string) => calls.findIndex((c) => c.key === k);
   assert.ok(at("diff-r0") < at("review-code-r0") && at("diff-r0") < at("review-ux-r0"));
 });
@@ -363,7 +363,7 @@ test("a fix that touched only tests is not re-reviewed", async () => {
 test("the integration re-review follows the last revise round", async () => {
   const { calls, task } = await simulate(args, (key) => (key === "integrate" ? failingTest() : blockerOnCode(key)));
   const keys = keysOf(calls);
-  assert.deepEqual(keys.slice(keys.indexOf("review-code-r1")), ["review-code-r1", "integrate", "integrate-fix", "integrate-recheck", "diff-r2", "review-code-r2", "pr"]);
+  assert.deepEqual(keys.slice(keys.indexOf("review-code-r1")), ["review-code-r1", "review-blind-r1", "integrate", "integrate-fix", "integrate-recheck", "diff-r2", "review-code-r2", "pr"]);
   assert.match(task("review-code-r2"), /"code-r2-<n>"/);
 });
 
@@ -565,6 +565,20 @@ test("the blind lens re-reviews with only its own earlier findings", async () =>
   assert.match(task("review-code-r1"), /blind-r0-scope-1/);
 });
 
+test("red team: revise on a code finding is reviewed blind, and the blind lens's r1 finding is compared with the scope", async () => {
+  const { result, task } = await simulate(args, (key) => {
+    if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "major", location: "a.ts:1", problem: "spec asks to drop the token check", fix: "f" }] } };
+    if (key === "review-blind-r1") return blindFinds("auth");
+    if (key === "revise-r1") return reviseDone(["code-r0-1"]);
+    if (key === "revise-r2") return reviseDone(["blind-r1-scope-1"]);
+    return happy({ spec: specDeclaring() })(key);
+  });
+  assert.match(task("revise-r2"), /"id": "blind-r1-scope-1"/);
+  assert.equal(result.trust.round, 2);
+  assert.deepEqual(result.rounds.map((r: { lenses: string[] }) => r.lenses), [["code", "ux", "blind"], ["code", "blind"], ["blind"]]);
+  assert.doesNotMatch(task("review-blind-r1"), /raised these findings/, "no earlier blind findings, so no prior-round text");
+});
+
 test("a spec missing at review stops and flags a human", async () => {
   const { result, calls, task } = await simulate({ ...args, startAt: "review" }, happy({ "diff-r0": diffListing(["a.ts"], { spec_present: false }) }));
   assert.deepEqual(keysOf(calls), ["diff-r0", "flag-review"]);
@@ -597,6 +611,11 @@ test("red team: a new dependency opens the PR with sensitive paths and labels th
   assert.ok(pr.includes("gh issue edit 2 -R owner/repo --add-label needs:human"));
   assert.ok(pr.indexOf("Sensitive paths touched") < pr.indexOf('"Closes #2"'), "the section comes first");
   assert.doesNotMatch(pr, /Sensitive paths not checked/);
+});
+
+test("a renamed sensitive file is flagged by its old path, which the diff lists as a delete", async () => {
+  const hit = await simulate(args, happy({ "diff-r0": diffListing([".github/workflows/security.yml", "docs/archive/security.yml"]) }));
+  assert.deepEqual(hit.result.sensitive, [{ path: ".github/workflows/security.yml", pattern: ".github/" }]);
 });
 
 test("configured sensitive paths add to the defaults", async () => {

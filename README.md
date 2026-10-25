@@ -28,7 +28,7 @@ Review lenses run in parallel: `code` always, and each lens the repository defin
 `.pi/crucible.json` when the issue carries its `review:<lens>` label. `blind`, the engine's own
 lens, always runs too and sees the diff without the issue or the spec. Before each review round a
 Haiku step writes the branch's diff for the reviewers, who have no shell. Only `blocker` and `major` findings send the branch back to
-revise, and only the lenses that asked for changes review again. Before the PR, the branch is merged with the
+revise, and only the lenses that asked for changes review again, plus the blind lens. Before the PR, the branch is merged with the
 latest main and every check runs. A conflict or a failure gets one fix round, and the `code` lens
 re-reviews a fix that touched non-test code. The PR opens with a sensitive-paths section when the
 branch touches CI, dependency or agent files. Green pills are the

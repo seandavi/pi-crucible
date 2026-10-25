@@ -327,7 +327,7 @@ in order, exactly as written:
   git -C ${cwdQ} diff --no-color --no-ext-diff --stat=200 ${range} ${withoutSpec} > ${shellQuote(blindFile)}
   git -C ${cwdQ} diff --no-color --no-ext-diff ${range} ${withoutSpec} >> ${shellQuote(blindFile)}
   wc -l < ${shellQuote(blindFile)}
-  git -C ${cwdQ} diff --name-only ${range}
+  git -C ${cwdQ} -c core.quotePath=false diff --name-only --no-renames ${range}
   test -f ${shellQuote(`${cwd}/${specPath}`)} && echo present || echo missing
 Report status "done", diff_lines (the number the first wc printed), blind_diff_lines (the number
 the second wc printed), changed_files (the paths the --name-only command printed, one per line; an
@@ -337,6 +337,11 @@ command and its error in summary.`,
   });
 }
 ```
+
+The changed-file command is `git -C ${cwdQ} -c core.quotePath=false diff --name-only --no-renames
+${range}`: git's default rename detection prints only the destination of a rename, so a moved CI
+workflow would not match `.github/`; `--no-renames` lists the old path (as a delete) and the new one.
+`core.quotePath=false` stops git quoting paths with non-ASCII bytes, which no glob would match.
 
 The `:(exclude)<path>` pathspec was verified with the local git (`git diff --name-only HEAD~3 HEAD -- . ':(exclude)docs/specs/14-...md'`
 drops that file from the list).
@@ -492,9 +497,11 @@ the responses to them, so the other lenses' spec-based reasoning does not reach 
 ```js
 function priorFor(lens, prior) {
   if (!prior || lens !== BLIND) return prior;
-  const ids = prior.findings.filter((f) => f.lens === BLIND).map((f) => f.id);
+  const own = prior.findings.filter((f) => f.lens === BLIND);
+  if (!own.length) return null;
+  const ids = own.map((f) => f.id);
   return {
-    findings: prior.findings.filter((f) => f.lens === BLIND),
+    findings: own,
     responses: prior.responses.filter((r) => ids.indexOf(r.id) >= 0),
   };
 }
@@ -568,9 +575,11 @@ let open = blocking(results, activeLenses).concat(scopeFindings(results, activeL
 
 Inside the loop, the round's diff is `noteDiff(diffFor(await diffRun(round), round))`, and
 `open = blocking(results, activeLenses).concat(scopeFindings(results, activeLenses, round));`.
-`activeLenses` is still `Array.from(new Set(open.map((f) => f.lens)))`, so the blind lens
-re-reviews exactly when one of its own or scope findings was blocking. `history` entries are
-unchanged, and they list `blind` among the lenses.
+`activeLenses` is `Array.from(new Set(open.map((f) => f.lens).concat([BLIND])))`: the blind lens
+re-reviews in every revise round, because revise can change code in answer to a finding from a lens
+that reads the spec (for example "remove this check"), and `scopeFindings` must compare the branch
+that ships, not the branch of round 0. `history` entries are unchanged, and they list `blind`
+among the lenses.
 
 The missing-spec stop happens only in round 0. In later rounds, the configured lenses' blocker
 finding (see `reviewTask`) is the backstop. A failed round-0 diff (`specPresent: null`) does not
@@ -744,7 +753,7 @@ In `argErrors`' cross-field block, the lens check becomes:
   spec to widen it; on `--start-at implement|review` there is no comparison and the record says so.
 - New paragraph **Sensitive paths**: the default list, the glob rules (the table above), the
   `sensitivePaths` field, the conservative "any path any stage touched" rule, and what the PR and
-  the issue get. A model only lists the paths (the diff stage copies `git diff --name-only`); the
+  the issue get. A model only lists the paths (the diff stage copies `git diff --name-only --no-renames`); the
   matching is in the script.
 - **Finding ids**: also `blind-r<round>-scope-<n>`.
 - **Stops**: add "a spec missing from the branch at review stops before any reviewer runs (no
@@ -824,6 +833,11 @@ No change to auth, secrets, network, dependencies or CI.
       `blind-r0-scope-1` (major), revise runs, and its task contains the `-scope-` paragraph. The
       blind lens re-reviews in r1. If it reports the change again, the PR is a draft and lists the
       finding as unresolved.
+- [ ] The spec declares `[]`, the code lens raises a `major` finding in r0, and the blind lens reports
+      nothing in r0 and `auth` in r1. Then revise-r1 runs, `review-blind-r1` runs with no earlier-findings
+      text, `blind-r1-scope-1` is open, and `trust.round` is the last round.
+- [ ] A diff listing both `.github/workflows/security.yml` and `docs/archive/security.yml` (a rename
+      under `--no-renames`) flags the first path.
 - [ ] The spec declares `["auth"]` and the blind lens reports `auth`. Then there is no scope
       finding, and the PR record's `trust` shows `undeclared: []`.
 - [ ] With `startAt: "review"` and the blind lens reporting `auth`, there is no scope finding,
@@ -872,7 +886,7 @@ All with the existing fakes (`simulate`, `happy`, `fakePi`). No git, gh, network
 **`test/workflow.test.ts`**
 
 - Update every call-order assertion to include `review-blind-r0` after the configured lenses in
-  round 0 (and `review-blind-r<n>` only where the blind lens had a blocking finding).
+  round 0 (and `review-blind-r<n>` in every revise round).
 - "every stage's prompt comes from the config, not the engine": loop over every call except
   `review-blind-*` for the design text. Add the blind assertions from the Acceptance criteria.
 - New tests, named as they would read in the output:

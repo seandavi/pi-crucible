@@ -73,10 +73,10 @@
 <text x="1010" y="413.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#0969da" font-weight="500" text-anchor="middle" xml:space="preserve">blocker/</text>
 <text x="1010" y="432.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#0969da" font-weight="500" text-anchor="middle" xml:space="preserve">major</text>
 <path d="M1130,468 L1130,372" fill="none" stroke="#8250df" stroke-width="2.5" marker-end="url(#ah-VIOLET)"/>
-<rect x="1074.26" y="387.5" width="111.48" height="65" rx="6" fill="#ffffff" opacity="0.92"/>
+<rect x="1065.58" y="387.5" width="128.84" height="65" rx="6" fill="#ffffff" opacity="0.92"/>
 <text x="1130" y="406.5" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#8250df" font-weight="500" text-anchor="middle" xml:space="preserve">re-review:</text>
 <text x="1130" y="425.5" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#8250df" font-weight="500" text-anchor="middle" xml:space="preserve">lenses that</text>
-<text x="1130" y="444.5" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#8250df" font-weight="500" text-anchor="middle" xml:space="preserve">asked</text>
+<text x="1130" y="444.5" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#8250df" font-weight="500" text-anchor="middle" xml:space="preserve">asked + blind</text>
 <rect x="1280" y="470" width="240" height="160" rx="12" fill="#0969da1f" stroke="#0969da" stroke-width="2"/>
 <text x="1298" y="502" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#1f2328" font-weight="650" text-anchor="start" xml:space="preserve">Fix · Sonnet</text>
 <text x="1298" y="537" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#59636e" font-weight="400" text-anchor="start" xml:space="preserve">conflict or failing</text>

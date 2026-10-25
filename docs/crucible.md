@@ -69,13 +69,15 @@ compares the two: a boundary the blind lens found and the spec did not declare i
 `blind-r<round>-scope-<n>`. Revise must remove that part of the change, or decline the finding if
 the issue needs it; it may never edit the spec to widen the declared scope, because a person decides
 whether the scope widens. A declined scope finding stays open and makes the PR a draft. The blind
-lens re-reviews in a later round only when it had a blocking finding, and then sees only its own
-earlier findings and the responses to them. On `--start-at implement|review` there is no spec-stage
+lens re-reviews in every revise round, alongside the lenses that had blocking findings, because revise
+can change code in answer to a finding from a lens that reads the spec; it sees only its own earlier
+findings and the responses to them. So the PR's trust-boundary record always describes the last
+reviewed state of the branch. On `--start-at implement|review` there is no spec-stage
 output to compare with, so the lens reports but nothing is compared, and the PR's record says so. The
 integration-fix re-review stays the `code` lens alone.
 
 **Sensitive paths** (#31): the script collects every path any stage reported changing (implement,
-revise, the integration fix, and each diff's `git diff --name-only`) and matches them against path
+revise, the integration fix, and each diff's `git diff --name-only --no-renames`) and matches them against path
 globs: the engine's defaults plus the repository's `sensitivePaths`. The defaults are CI
 (`.github/`, `.gitlab-ci.yml`, `.circleci/`), agent instructions (`AGENTS.md`, `CLAUDE.md`, `.pi/`)
 and dependency manifests and lockfiles (`package.json`, `package-lock.json`, `npm-shrinkwrap.json`,
@@ -87,7 +89,8 @@ touched" section listing each path and the pattern it matched, and the issue is 
 `needs:human` as well as the PR. If no list of changed files exists at all (every diff failed and
 no stage reported files), the PR says sensitive paths were not checked, with the same label. The PR
 is not made a draft for this alone. A model only lists the paths (the diff stage copies
-`git diff --name-only`); the matching is in the script. The set is conservative: a path changed and
+`git diff --name-only --no-renames`, so a rename lists the old path as well as the new one, and
+`core.quotePath=false` keeps non-ASCII paths unquoted); the matching is in the script. The set is conservative: a path changed and
 later reverted still counts.
 
 | Pattern | Matches | Does not match |

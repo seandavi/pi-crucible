@@ -133,7 +133,7 @@ def crucible_flow(theme: dict[str, str]) -> str:
     f.box(950, 470, 240, 140, "Revise · Sonnet", ["fix the root cause", "keep the spec in step",
                                                   "at most 2 rounds"], "BLUE")
     f.arrow([(1010, 369), (1010, 465)], "BLUE", "blocker/\nmajor", (1010, 417))
-    f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked", (1130, 420))
+    f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked + blind", (1130, 420))
 
     f.box(1280, 470, 240, 160, "Fix · Sonnet", ["conflict or failing", "  check: one round", "code lens re-reviews",
                                                 "  non-test fixes"], "BLUE")

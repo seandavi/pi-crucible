@@ -355,7 +355,7 @@ in order, exactly as written:
   git -C ${cwdQ} diff --no-color --no-ext-diff --stat=200 ${range} ${withoutSpec} > ${shellQuote(blindFile)}
   git -C ${cwdQ} diff --no-color --no-ext-diff ${range} ${withoutSpec} >> ${shellQuote(blindFile)}
   wc -l < ${shellQuote(blindFile)}
-  git -C ${cwdQ} diff --name-only ${range}
+  git -C ${cwdQ} -c core.quotePath=false diff --name-only --no-renames ${range}
   test -f ${shellQuote(`${cwd}/${specPath}`)} && echo present || echo missing
 Report status "done", diff_lines (the number the first wc printed), blind_diff_lines (the number
 the second wc printed), changed_files (the paths the --name-only command printed, one per line; an
@@ -509,9 +509,11 @@ ${findingRules(BLIND, round)}`;
 // lenses' spec-based reasoning does not reach it.
 function priorFor(lens, prior) {
   if (!prior || lens !== BLIND) return prior;
-  const ids = prior.findings.filter((f) => f.lens === BLIND).map((f) => f.id);
+  const own = prior.findings.filter((f) => f.lens === BLIND);
+  if (!own.length) return null;
+  const ids = own.map((f) => f.id);
   return {
-    findings: prior.findings.filter((f) => f.lens === BLIND),
+    findings: own,
     responses: prior.responses.filter((r) => ids.indexOf(r.id) >= 0),
   };
 }
@@ -640,7 +642,9 @@ Report every finding id in responses and all files you changed.`,
   touch(revOut.changed_files);
   checks = revOut.checks || checks;
   const prior = { findings: open, responses: revOut.responses || [] };
-  activeLenses = Array.from(new Set(open.map((f) => f.lens)));
+  // The blind lens re-reviews every round: revise may change code for a finding another lens raised,
+  // and `trust` must describe the branch that ships.
+  activeLenses = Array.from(new Set(open.map((f) => f.lens).concat([BLIND])));
   diff = noteDiff(diffFor(await diffRun(round), round));
   results = await reviewBatch(activeLenses, diff, files, round, prior);
   open = blocking(results, activeLenses).concat(scopeFindings(results, activeLenses, round));
