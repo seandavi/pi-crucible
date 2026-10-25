@@ -97,6 +97,7 @@ test("init --dry-run changes nothing; an existing config is left alone and decid
   const notes2 = await init(has.io, "/r", { write: true, dryRun: false });
   assert.deepEqual(has.calls.filter((c) => c.startsWith("gh label create")).map((c) => c.split(" ")[3]), ["review:privacy"]);
   assert.deepEqual(has.written, {});
+  assert.ok(!notes2.some((n) => /^(No AGENTS\.md|Starter AGENTS\.md|Wrote .*AGENTS\.md)/.test(n[1])));
   assert.ok(!has.reads.some((r) => AGENT_DOCS.includes(r)));
   assert.match(notes2.map((n) => n[1]).join("\n"), /\.pi\/factory\.json exists; not changing it\. Rename it to \.pi\/crucible\.json\./);
 });

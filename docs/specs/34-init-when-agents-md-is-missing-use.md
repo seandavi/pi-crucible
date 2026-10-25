@@ -328,8 +328,10 @@ to record every relative path its `readText` is asked for in a `reads: string[]`
    resolves, warns that the config is invalid, and the starter's Commands section is the
    placeholder.
 5. **Update "init --dry-run changes nothing; an existing config is left alone…".** Both of its repos
-   have `AGENTS.md`. Add: no note matches `/AGENTS\.md/`, `reads` contains none of `AGENT_DOCS`,
-   and `has.written` is still `{}`.
+   have `AGENTS.md`. Add, for both repos: no note matches
+   `/^(No AGENTS\.md|Starter AGENTS\.md|Wrote .*AGENTS\.md)/` (not plain `/AGENTS\.md/`, because the
+   starter config's generic design and implement texts mention AGENTS.md and the dry repo prints
+   them), and `reads` contains none of `AGENT_DOCS`. `has.written` is still `{}`.
 6. **New test: "starterAgentsMd".** The three cases in the acceptance criteria: docs and checks;
    no docs (no `## Read first`); no checks (the placeholder line). Assert the text ends with
    `"\n"` and not `"\n\n"`.
