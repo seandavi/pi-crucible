@@ -107,7 +107,7 @@ trailing `/` means everything under that directory, and a pattern without `/` ma
 in any directory.
 
 **Revise rounds:** at most two. Only `blocker` and `major` findings trigger a round, and only the
-lenses that asked for changes review again. Revise fixes root causes and updates the spec when a
+lenses that asked for changes review again, plus the blind lens (see The blind lens). Revise fixes root causes and updates the spec when a
 fix changes an interface, rule or example. Re-reviewers see the earlier findings and the responses
 and judge the fix itself: a symptom patch that leaves the root cause is a new `major`. Added after
 #2, where a post-hoc redirect check was accepted in round 1 and later replaced by hand. If
