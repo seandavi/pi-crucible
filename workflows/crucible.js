@@ -53,6 +53,14 @@ be bypassed, a missing validation, a leaky contract) is at least "major", even i
 it yet.`
   : "";
 const specPath = `${config.specDir || "docs/specs"}/${issue}-${input.slug}.md`;
+// The code lens checks the change against the issue's report, which the spec's Goal opens with
+// (#36): a fix that only changes how the problem is described is not a fix.
+const REPORT_CHECK = `
+Also check that the change fixes what the issue reported, not only how it is described. The Goal
+in ${specPath} opens with the behaviour the issue reports: does the diff end that behaviour? A
+change that leaves it in place (for example by only rewording a message, a log line or a doc about
+it) is a "major" finding. So is a non-goal in the spec that rules out the fix the issue asks for
+with no reason but an ADR, a doc or a code comment describing the current behaviour.`;
 // Where the diff step writes the diff each review round reads; its .gitignore ("*") keeps the
 // directory out of git without touching the repository's own ignore files.
 const REVIEW_DIR = ".pi/crucible-review";
@@ -168,15 +176,27 @@ if (stageRuns("spec")) {
     task: `${COMMON}
 
   You are the SPEC stage. Do not write any code.
-  1. Read the issue: gh issue view ${issue} -R ${repo} --comments. Read AGENTS.md and the design
-     sources above.
+  1. Read the issue: gh issue view ${issue} -R ${repo} prints its title and body, then
+     gh issue view ${issue} -R ${repo} --comments prints its comments (outside a terminal,
+     --comments prints the comments only). Read AGENTS.md and the design sources above.
   2. Write ${specPath}: Goal; Non-goals; Design (${config.spec.design}); Acceptance criteria as a
-     testable checklist; Test plan; Risks. Be concrete enough that an implementer never has to
+     testable checklist; Test plan; Risks. Start the Goal with what the issue reports: the
+     behaviour it says is wrong and its evidence, in the issue's own words; then say how the
+     change ends that behaviour. Be concrete enough that an implementer never has to
      choose a library or an interface. Verify package APIs you rely on (the package manager's
      metadata or the package's docs) rather than guessing.
   3. Commit only that file ("Spec for #${issue}").
-  Set status "blocked" only if a question has two reasonable answers with materially different
-  outcomes that the issue and the design sources do not settle; list them in blocking_questions.`,
+  ADRs and code comments are inputs, not constraints, and so are the other design sources: they
+  describe the code as it was when they were written. If the issue's evidence contradicts a
+  premise one of them states (a comment says a case never happens; the issue shows it happening),
+  say so in the spec's Design section, naming the document and the evidence. Then propose the
+  change the evidence calls for, unless the document argues for the current behaviour on grounds
+  the issue does not answer: then stop, with status "blocked" and the contradiction in
+  blocking_questions. Never make the fix the issue asks for a non-goal because a document
+  describes the current behaviour; a non-goal needs a reason of its own.
+  Set status "blocked" only for such a contradiction, or if a question has two reasonable answers
+  with materially different outcomes that the issue and the design sources do not settle; list
+  them in blocking_questions.`,
   });
   specOut = spec.structuredOutput || {};
   if (!spec.ok || specOut.status !== "ready") {
@@ -293,7 +313,7 @@ ${diff.files.length ? `Changed files: ${diff.files.join(", ")}.` : "The diff is 
     : `The diff for this round could not be prepared (${diff.record}) and you cannot run git. Review ${files.length ? `the changed files: ${files.join(", ")}` : "the files the spec says change"}.`;
   return `${CONTEXT}
 
-You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
+You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}${lens === "code" && !note ? REPORT_CHECK : ""}
 ${source}
 Read ${specPath} (if it does not exist, review against the issue), AGENTS.md and any other file you
 need, including a changed file in full when its hunks are not enough. Do not edit anything.${priorRound(prior)}${note ? `\n${note}` : ""}
