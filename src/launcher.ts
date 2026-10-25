@@ -1,7 +1,7 @@
 // The /crucible command's logic: from "/crucible 12" in a repo checkout to the workflow's args.
 //
 //   parseCommand  "/crucible" arguments → issue number and options
-//   prepare       fetches origin; reads .pi/crucible.json from origin/main, the issue, its branch and the engine commit; plans the launch
+//   prepare       fetches origin; reads .pi/crucible.json from origin/main, the issue, its branch, competing PRs and the engine commit; plans the launch
 //   ensureWorktree creates (or reuses) the issue's worktree and branch
 //
 // Side effects go through an injected `exec`, so tests can run without git, gh or a network.
@@ -26,16 +26,18 @@ export interface CommandOptions {
   issue: number;
   startAt: StartAt;
   lenses: string[];
+  /** Launch even when another branch already has an open PR that closes the issue. */
+  ignoreOpenPr: boolean;
   dryRun: boolean;
 }
 
 export const USAGE =
-  "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]";
+  "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--ignore-open-pr] [--dry-run]";
 
 /** Parse the text after "/crucible". Returns an error message instead of throwing. */
 export function parseCommand(input: string): CommandOptions | { error: string } {
   const words = input.trim().split(/\s+/).filter(Boolean);
-  const out: CommandOptions = { issue: 0, startAt: "spec", lenses: [], dryRun: false };
+  const out: CommandOptions = { issue: 0, startAt: "spec", lenses: [], ignoreOpenPr: false, dryRun: false };
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const value = () => {
@@ -45,6 +47,7 @@ export function parseCommand(input: string): CommandOptions | { error: string } 
     };
     try {
       if (w === "--dry-run") out.dryRun = true;
+      else if (w === "--ignore-open-pr") out.ignoreOpenPr = true;
       else if (w === "--start-at" || w.startsWith("--start-at=")) {
         const v = w.includes("=") ? w.split("=")[1] : value();
         if (!(STARTS as readonly string[]).includes(v)) return { error: `--start-at must be one of ${STARTS.join(", ")}. ${USAGE}` };
@@ -205,6 +208,62 @@ export function labelProblems(file: CrucibleFile, repo: string, existing: string
   return { errors, warnings };
 }
 
+/** A pull request that closes an issue, as GitHub's closedByPullRequestsReferences reports it. */
+export interface LinkedPr {
+  number: number;
+  url: string;
+  /** "OPEN", "MERGED" or "CLOSED". */
+  state: string;
+  headRefName: string;
+  isCrossRepository: boolean;
+  repository: { nameWithOwner: string };
+}
+
+/**
+ * PRs that close an issue: a closing keyword ("Fixes #12") or a link in the issue's Development
+ * sidebar. Without includeClosedPrs GitHub leaves out closed PRs but still returns merged ones, so
+ * callers filter on state.
+ */
+export const LINKED_PRS_QUERY =
+  "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { issue(number: $number) { " +
+  "closedByPullRequestsReferences(first: 50) { nodes { number url state headRefName isCrossRepository repository { nameWithOwner } } } } } }";
+
+/**
+ * Open PRs that would close the issue from a branch other than the run's own, so a run does not
+ * open a second PR for an issue that already has one. The run's own PR (`branch` in `repo`, not
+ * from a fork) is left out: --start-at review updates it.
+ */
+export async function findCompetingPrs(exec: Exec, repo: string, issue: number, branch: string): Promise<LinkedPr[]> {
+  const [owner, name] = repo.split("/");
+  const out = await run(exec, "gh", [
+    "api", "graphql",
+    "-f", `query=${LINKED_PRS_QUERY}`,
+    "-f", `owner=${owner}`,
+    "-f", `name=${name}`,
+    "-F", `number=${issue}`,
+  ]);
+  const nodes = (JSON.parse(out) as { data: { repository: { issue: { closedByPullRequestsReferences: { nodes: LinkedPr[] } } } } })
+    .data.repository.issue.closedByPullRequestsReferences.nodes;
+  const own = (pr: LinkedPr) =>
+    pr.repository.nameWithOwner.toLowerCase() === repo.toLowerCase() && !pr.isCrossRepository && pr.headRefName === branch;
+  return nodes.filter((pr) => pr.state === "OPEN" && !own(pr));
+}
+
+/** A dry run or --ignore-open-pr warns about competing PRs; a real launch without the flag refuses. */
+export function competingPrCheck(
+  repo: string,
+  issue: number,
+  prs: LinkedPr[],
+  options: Pick<CommandOptions, "dryRun" | "ignoreOpenPr">,
+): { errors: string[]; warnings: string[] } {
+  if (!prs.length) return { errors: [], warnings: [] };
+  const list = prs.map((pr) => `${pr.url} (branch ${pr.headRefName}${pr.isCrossRepository ? " on a fork" : ""})`).join(", ");
+  const head = `${repo}#${issue} already has an open PR from another branch: ${list}.`;
+  if (options.ignoreOpenPr) return { errors: [], warnings: [`${head} --ignore-open-pr: launching anyway, so the issue will have a second PR.`] };
+  if (options.dryRun) return { errors: [], warnings: [`${head} A real launch refuses unless you pass --ignore-open-pr.`] };
+  return { errors: [`${head} A run would open a second, competing PR. Close or merge that PR first, or pass --ignore-open-pr to launch anyway.`], warnings: [] };
+}
+
 /** The engine's own checkout: its commit, and whether tracked files differ from it. */
 export async function engineCommit(exec: Exec, packageRoot: string) {
   try {
@@ -320,7 +379,9 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
 
   const engine = await engineCommit(exec, PACKAGE_ROOT);
   const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine, configSource: loaded.source });
-  plan.warnings = [...fetchWarning, ...loaded.warnings, ...plan.warnings, ...labelCheck.warnings];
+  const prCheck = competingPrCheck(repo, issue.number, await findCompetingPrs(exec, repo, issue.number, plan.branch), options);
+  if (prCheck.errors.length) throw new Error(prCheck.errors.join("\n"));
+  plan.warnings = [...fetchWarning, ...loaded.warnings, ...plan.warnings, ...labelCheck.warnings, ...prCheck.warnings];
   return plan;
 }
 

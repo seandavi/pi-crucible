@@ -62,13 +62,13 @@ export default function (pi: ExtensionAPI) {
 
   const completions = (prefix: string) =>
     prefix.startsWith("-")
-      ? ["--start-at implement", "--start-at review", "--lens ", "--dry-run"]
+      ? ["--start-at implement", "--start-at review", "--lens ", "--ignore-open-pr", "--dry-run"]
           .filter((o) => o.startsWith(prefix))
           .map((value) => ({ value, label: value }))
       : null;
 
   pi.registerCommand("crucible", {
-    description: "Run an issue through pi-crucible: /crucible <issue> [--start-at implement|review] [--lens <name>] [--dry-run] | /crucible init [--write] [--dry-run]",
+    description: "Run an issue through pi-crucible: /crucible <issue> [--start-at implement|review] [--lens <name>] [--ignore-open-pr] [--dry-run] | /crucible init [--write] [--dry-run]",
     handler: (input, ctx) => runCommand(input, ctx),
     getArgumentCompletions: completions,
   });
