@@ -38,9 +38,11 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
   const listeners = new Map<string, Set<(data: unknown) => void>>();
   const emitted: { channel: string; data: unknown }[] = [];
   const execCalls: ExecCall[] = [];
+  const messages: { message: unknown; options: unknown }[] = [];
   const pi = {
     on: (name: string, fn: Handler) => void (handlers[name] = fn),
     registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => Promise<void> }) => void (commands[name] = def),
+    sendMessage: (message: unknown, options?: unknown) => void messages.push({ message, options }),
     exec: async (cmd: string, args: string[], o?: { cwd?: string }) => {
       const call = { cmd, args, cwd: o?.cwd };
       execCalls.push(call);
@@ -59,5 +61,5 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
       },
     },
   };
-  return { pi, handlers, commands, emitted, execCalls };
+  return { pi, handlers, commands, emitted, execCalls, messages };
 }

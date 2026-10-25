@@ -15,11 +15,13 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
 import { init, parseInit } from "../src/init.ts";
-import { ensureWorktree, parseCommand, prepare } from "../src/launcher.ts";
+import { ensureWorktree, HOST_NOTE, parseCommand, prepare } from "../src/launcher.ts";
 import { crucibleResource, LEGACY_RESOURCE_NAME, loadScript, RESOURCE_NAME } from "../src/resource.ts";
 
 const RPC_REQUEST = "subagents:rpc:v1:request";
 const RPC_REPLY = "subagents:rpc:v1:reply:";
+/** customType of the message /crucible appends to the session that hosts a run. */
+const HOST_MESSAGE_TYPE = "pi-crucible-host";
 
 /** One pi-subagents RPC call; rejects if pi-subagents is not loaded or refuses the request. */
 function rpc(pi: ExtensionAPI, method: string, params: Record<string, unknown>, timeoutMs = 20_000): Promise<unknown> {
@@ -109,6 +111,8 @@ export default function (pi: ExtensionAPI) {
         details?: { asyncId?: string; runId?: string };
       };
       const id = data?.details?.asyncId ?? data?.details?.runId;
+      // The completion wake starts a turn in this session; tell it now that a person merges the PR (#35).
+      pi.sendMessage({ customType: HOST_MESSAGE_TYPE, content: HOST_NOTE, display: true }, { triggerTurn: false });
       ctx.ui.notify(
         `Crucible launched for #${plan.args.issue} (${(plan.args.lenses as string[]).join(", ")}${plan.args.seam ? ", seam" : ""})` +
           `${id ? `: run ${id}` : ""}. Follow it with /subagents-fleet.`,
