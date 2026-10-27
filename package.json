@@ -15,10 +15,14 @@
   "pi": {
     "extensions": [
       "./extensions/crucible.ts"
+    ],
+    "skills": [
+      "./skills"
     ]
   },
   "files": [
     "extensions",
+    "skills",
     "src",
     "workflows",
     "docs",
