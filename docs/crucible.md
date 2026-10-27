@@ -175,6 +175,18 @@ generic texts for `design`, `spec.design`, `implement` and the `code`, `security
 Edit those texts for the project (they make better runs) and merge the file to `main`. With no
 checks detected the config has none, and runs report "no checks configured".
 
+## Before a run: triage
+
+An issue is a claim from whoever filed it. The package ships an `issue-triage` skill
+([`skills/issue-triage/SKILL.md`](../skills/issue-triage/SKILL.md)), invoked by name
+(`/skill:issue-triage` in pi). It checks the issue's claims against real data, logs and code and
+drafts a record for Sean to approve before it posts. The record says whether the issue is real,
+what the evidence is, and what is missing; it does not design the fix, which stays with the spec
+stage. Outcomes are `triage:ready` (applied by Sean only), `triage:needs-info`,
+`triage:unconfirmed`, not-a-bug and duplicate. The record is a comment marked
+`<!-- issue-triage -->`. The spec stage does not yet treat it differently from any other comment;
+that is a follow-up. Added after omicidx#237 (#51).
+
 ## Running it
 
 From pi, anywhere inside the repository (its main checkout or any worktree):
