@@ -109,10 +109,24 @@ export default function (pi: ExtensionAPI) {
         details?: { asyncId?: string; runId?: string };
       };
       const id = data?.details?.asyncId ?? data?.details?.runId;
-      ctx.ui.notify(
-        `Crucible launched for #${plan.args.issue} (${(plan.args.lenses as string[]).join(", ")}${plan.args.seam ? ", seam" : ""})` +
-          `${id ? `: run ${id}` : ""}. Follow it with /subagents-fleet.`,
-        "info",
+      const lenses = `${(plan.args.lenses as string[]).join(", ")}${plan.args.seam ? ", seam" : ""}`;
+      ctx.ui.notify(`Crucible launched for #${plan.args.issue} (${lenses})${id ? `: run ${id}` : ""}. Follow it with /subagents-fleet.`, "info");
+      // notify() reaches only the user. Tell the agent too, or the per-stage notices pi-subagents
+      // sends it later name a run it knows nothing about (#49). nextTurn: no turn of its own.
+      pi.sendMessage(
+        {
+          customType: "crucible",
+          display: true,
+          content:
+            `The user ran /crucible for issue #${plan.args.issue}, which launched pi-crucible run ${id ?? "(id unknown)"} ` +
+            `in the background, starting at the ${plan.startAt} stage with lenses ${lenses}.\n` +
+            `Worktree: ${plan.worktree} (branch ${plan.branch}). Config: ${plan.configSource}.\n` +
+            `Workflow notices for this run id are its stages finishing; the run opens a PR itself. ` +
+            `When it completes, report the PR, check results, unresolved review findings and follow-up issue to the user. ` +
+            `Do not edit the worktree while the run is going.`,
+          details: { issue: plan.args.issue, runId: id, worktree: plan.worktree, branch: plan.branch, startAt: plan.startAt },
+        },
+        { deliverAs: "nextTurn" },
       );
     } catch (e) {
       ctx.ui.notify(`/crucible: ${(e as Error).message}`, "error");
