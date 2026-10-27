@@ -22,13 +22,15 @@ from. The reporter's text is just evidence.
   describes the current behaviour.
 - Checking is read-only. Don't run repairs, `--force`, migrations or writes, even when the repair
   is obvious. Put the repair in the record for Sean to run.
+- Use the credentials the tools already have. Don't open `.env` files, key files or secret stores,
+  and never put a secret value in the record or your notes.
 
 ## Steps
 
 1. **Read.** `gh api repos/OWNER/REPO/issues/N` and `.../issues/N/comments`, keeping each author's
    `author_association`. Read any earlier triage record (comments containing `<!-- issue-triage -->`)
-   and report what changed since, rather than starting over. Read AGENTS.md and the code, docs and
-   ADRs in the affected area.
+   and report what changed since, rather than starting over. Read AGENTS.md (or CLAUDE.md) and the
+   code, docs and ADRs in the affected area.
 
 2. **List the claims.** Split the report into separate checkable claims: the symptom, each piece of
    evidence, the suspected cause and the proposed fix. Note which claims the whole report rests on.
@@ -38,18 +40,24 @@ from. The reporter's text is just evidence.
    query and what it returned. A claim is **confirmed** (your check agrees), **contradicted** (your
    check disagrees), or **not checked**, with the reason (no access, data since repaired, needs the
    reporter's environment). Agreeing with the reporter's numbers is not a check; reproduce them.
+   Say whether you ran something or only read the code: "confirmed by reading `f()`" is weaker than
+   "confirmed by running it", and the result column should show which.
 
 4. **Look around.** Search open and closed issues and PRs for the same problem or an existing fix,
-   by concept and not only by wording. Name where you looked.
+   by concept and not only by wording. Name where you looked. Note the same pattern elsewhere in the
+   code, and docs that are now wrong, under **Also found**; don't fold them into this issue's scope.
 
 5. **Choose an outcome.** Don't let the label become a rubber stamp: `ready` is the exception that
    must be earned.
    - **ready**: you confirmed the central claims with your own checks, and the record is enough for a
-     spec. Recommend it; only Sean applies `triage:ready`.
+     spec. Recommend it; only Sean applies `triage:ready`. A wrong side detail (one bad example among
+     confirmed ones) doesn't change the outcome; mark that row contradicted.
    - **needs-info**: something only the reporter can supply is missing. Ask only for what you could
      not look up, as specific questions.
    - **unconfirmed**: you could not confirm it, and more questions won't help (data since repaired,
-     no access, cannot reproduce). Say exactly what you tried.
+     no access, cannot reproduce). Say exactly what you tried. If the symptom still reproduces where
+     the reporter saw it (a published file, a page), it is not unconfirmed, even if a source behind
+     it has since been repaired.
    - **not-a-bug** or **duplicate**: the checks contradict the report, or another issue covers it.
      Link the evidence or the other issue. Sean decides whether to close.
 
@@ -79,6 +87,8 @@ timeline. Say what you could not confirm. No headings beyond the template, no em
 
 <one or two sentences: what is going on, as far as the checks show>
 
+<optional, outside reporters only: one line of thanks for what was actually useful>
+
 **Checked**
 
 | Claim | How I checked | Result |
@@ -87,9 +97,12 @@ timeline. Say what you could not confirm. No headings beyond the template, no em
 
 **Not confirmed:** <claims not checked and why, or "nothing">
 
-**Repair now** (optional): <operator command that restores data or service; not the code fix>
+**Repair** (optional): <operator steps that restore data or service, not the code fix; say which
+already ran (and when) and which remain>
 
 **Where the cause is:** <the code path or config behind it: where, not how to fix it>
+
+**Also found** (optional): <same pattern elsewhere, stale docs; Sean decides whether to file them>
 
 **Questions** (needs-info only): <specific questions for @reporter>
 ```
