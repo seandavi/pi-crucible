@@ -247,7 +247,7 @@ test("ensureWorktree creates a branch from origin/main, or reuses what exists", 
 
 test("/crucible prepares the worktree and launches the named resource over RPC", async () => {
   const repo = mkdtempSync(path.join(tmpdir(), "pi-crucible-"));
-  const { pi, commands, emitted } = fakePi(({ cmd, args }) => {
+  const { pi, commands, emitted, sent } = fakePi(({ cmd, args }) => {
     const line = `${cmd} ${args.join(" ")}`;
     if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
     if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
@@ -281,12 +281,18 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
   assert.match(notes[0][1], /new branch issue-4-diff-for-reviewers from origin\/main/);
   assert.match(notes[1][1], /Crucible launched for #4 \(code\): run run-42/);
   assert.equal(emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length, 1);
+  // The agent hears about the launch too, without a turn of its own (#49).
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].options?.deliverAs, "nextTurn");
+  assert.match(sent[0].message.content, /issue #4, which launched pi-crucible run run-42/);
+  assert.match(sent[0].message.content, /branch issue-4-diff-for-reviewers/);
 
   notes.length = 0;
   await commands.crucible.handler("4 --dry-run", ctx);
   assert.match(notes[0][1], /^Dry run: would prepare .*issue-4 on issue-4-diff-for-reviewers/);
   assert.match(notes[0][1], /\nConfig: origin\/main:\.pi\/crucible\.json \(0123456\)\n/);
   assert.equal(emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length, 1, "dry run launches nothing");
+  assert.equal(sent.length, 1, "dry run tells the agent nothing");
 
   notes.length = 0;
   await commands.crucible.handler("", ctx);
