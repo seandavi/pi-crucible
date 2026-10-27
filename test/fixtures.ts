@@ -35,6 +35,8 @@ export interface ExecCall { cmd: string; args: string[]; cwd?: string }
 export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?: string; code?: number } = () => ({})) {
   const handlers: Record<string, Handler> = {};
   const commands: Record<string, { handler: (args: string, ctx: unknown) => Promise<void> }> = {};
+  type ToolResult = { content: { type: string; text: string }[]; details: Record<string, unknown> };
+  const tools: Record<string, { description: string; execute: (id: string, params: unknown, signal: unknown, onUpdate: unknown, ctx: unknown) => Promise<ToolResult> }> = {};
   const listeners = new Map<string, Set<(data: unknown) => void>>();
   const emitted: { channel: string; data: unknown }[] = [];
   const execCalls: ExecCall[] = [];
@@ -43,6 +45,7 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
     sendMessage: (message: (typeof sent)[number]["message"], options?: { deliverAs?: string }) => void sent.push({ message, options }),
     on: (name: string, fn: Handler) => void (handlers[name] = fn),
     registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => Promise<void> }) => void (commands[name] = def),
+    registerTool: (def: (typeof tools)[string] & { name: string }) => void (tools[def.name] = def),
     exec: async (cmd: string, args: string[], o?: { cwd?: string }) => {
       const call = { cmd, args, cwd: o?.cwd };
       execCalls.push(call);
@@ -61,5 +64,5 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
       },
     },
   };
-  return { pi, handlers, commands, emitted, execCalls, sent };
+  return { pi, handlers, commands, tools, emitted, execCalls, sent };
 }
