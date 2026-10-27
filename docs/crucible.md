@@ -217,7 +217,16 @@ such branches are an error that lists them. The repository should have the `need
 command if it is missing; the stages also create it when they flag a stop, so hand launches are covered) and should have `seam` and
 `review:<lens>` for the lenses it defines (a warning if not).
 
-Launching by hand still works, for scripts or other agents: pass the same args `/crucible --dry-run`
+**From an agent:** the extension also registers two tools on the same code path, so the agent in a
+pi session can start runs without rebuilding args (#53). `crucible_plan({issue, startAt?, lenses?})`
+returns what `--dry-run` shows (worktree, branch, lenses, config source, warnings, args) and changes
+nothing but the fetch. `crucible_launch` with the same parameters prepares the worktree, launches and
+returns the run id; it refuses with the same messages as `/crucible`. Both the launch result and the
+message `/crucible` sends the agent say that a person merges the PR: the agent must not merge,
+approve, push to the branch, or comment on or close the issue or PR (#35). Which issues to launch is
+the caller's decision; the tools don't check triage state.
+
+Launching by hand still works, for scripts and agents outside pi: pass the same args `/crucible --dry-run`
 prints. The validator holds hand launches to the names `/crucible` derives: `branch` must be
 `issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
 metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,

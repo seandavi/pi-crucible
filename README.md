@@ -68,6 +68,9 @@ Then, in pi, inside a repository:
 /crucible 12               # create the worktree and launch the run
 ```
 
+The agent in a pi session can do the same with the `crucible_plan` and `crucible_launch` tools, for
+example when you ask it to run an issue.
+
 An `AGENTS.md` with the project's stack, layout, rules and commands matters more than anything in the
 config: every stage reads it first. The run works in its own git worktree, labels anything that needs
 you `needs:human`, and opens a PR you review and merge. Your queue is `gh issue list -l needs:human`

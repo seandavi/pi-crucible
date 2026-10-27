@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import extension from "../extensions/crucible.ts";
+import extension, { HOSTING } from "../extensions/crucible.ts";
 import { engineConfigErrors, crucibleFileErrors } from "../src/config.ts";
 import {
   ensureWorktree,
@@ -286,6 +286,7 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
   assert.equal(sent[0].options?.deliverAs, "nextTurn");
   assert.match(sent[0].message.content, /issue #4, which launched pi-crucible run run-42/);
   assert.match(sent[0].message.content, /branch issue-4-diff-for-reviewers/);
+  assert.ok(sent[0].message.content.includes(HOSTING), "the agent is told a person merges (#35)");
 
   notes.length = 0;
   await commands.crucible.handler("4 --dry-run", ctx);
@@ -297,6 +298,58 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
   notes.length = 0;
   await commands.crucible.handler("", ctx);
   assert.deepEqual(notes, [["error", "Usage: /crucible <issue> [--start-at implement|review] [--lens <name>]... [--dry-run]"]]);
+});
+
+test("crucible_plan and crucible_launch take the /crucible path and tell the agent not to merge (#53)", async () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "pi-crucible-"));
+  let issueState = "OPEN";
+  const { pi, commands, tools, emitted } = fakePi(({ cmd, args }) => {
+    const line = `${cmd} ${args.join(" ")}`;
+    if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
+    if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
+    if (line.startsWith("gh issue view")) return { stdout: JSON.stringify({ number: 4, title: "Diff for reviewers", state: issueState, labels: [] }) };
+    if (line.startsWith("gh label list")) return { stdout: JSON.stringify(["needs:human", "seam", "review:ux"].map((name) => ({ name }))) };
+    if (line.includes("rev-parse HEAD")) return { stdout: "abcdef1" };
+    if (line.includes("refs/remotes/origin/main")) return { stdout: "0123456789abcdef0123456789abcdef01234567" };
+    if (line.startsWith("git cat-file -e")) return {};
+    if (line.startsWith("git cat-file blob")) return { stdout: JSON.stringify(crucibleFile) };
+    if (line.includes("--verify --quiet")) return { code: 1 };
+    return {};
+  });
+  extension(pi as never);
+  pi.events.on("subagents:rpc:v1:request", (req) => {
+    const { requestId, params } = req as { requestId: string; params: Record<string, unknown> };
+    assert.deepEqual(argErrors(params.args as Record<string, unknown>), []);
+    pi.events.emit(`subagents:rpc:v1:reply:${requestId}`, { version: 1, requestId, success: true, data: { details: { asyncId: "run-43" } } });
+  });
+  const notes: [string, string][] = [];
+  const ctx = { cwd: repo, ui: { notify: (m: string, level: string) => notes.push([level, m]) } };
+  const spawns = () => emitted.filter((e) => e.channel === "subagents:rpc:v1:request").length;
+
+  // The tool's plan is the dry run's plan.
+  await commands.crucible.handler("4 --lens ux --dry-run", ctx);
+  const dryArgs = JSON.parse(notes[0][1].slice(notes[0][1].indexOf("Args:\n") + 6));
+  const planned = await tools.crucible_plan.execute("t1", { issue: 4, lenses: ["ux"] }, undefined, undefined, ctx);
+  assert.deepEqual(planned.details.args, dryArgs);
+  assert.equal(planned.details.branch, "issue-4-diff-for-reviewers");
+  assert.equal(spawns(), 0, "planning launches nothing");
+
+  const launched = await tools.crucible_launch.execute("t2", { issue: 4 }, undefined, undefined, ctx);
+  assert.equal(spawns(), 1);
+  assert.equal(launched.details.runId, "run-43");
+  assert.deepEqual(launched.details.lenses, ["code"]);
+  assert.match(launched.content[0].text, /^Launched pi-crucible run run-43 for issue #4 \(code\)/);
+  assert.ok(launched.content[0].text.includes(HOSTING), "the result says a person merges (#35)");
+  assert.match(tools.crucible_launch.description, /never merge/);
+
+  // Refusals are the command's: a closed issue fails before anything launches.
+  issueState = "CLOSED";
+  notes.length = 0;
+  await commands.crucible.handler("4", ctx);
+  const refusal = notes[0][1].replace(/^\/crucible: /, "");
+  await assert.rejects(tools.crucible_launch.execute("t3", { issue: 4 }, undefined, undefined, ctx), { message: refusal });
+  await assert.rejects(tools.crucible_plan.execute("t4", { issue: 4 }, undefined, undefined, ctx), { message: refusal });
+  assert.equal(spawns(), 1);
 });
 
 test("example configs and this repo's own config are valid; the schema file is current", () => {
