@@ -63,7 +63,7 @@ Then, in pi, inside a repository:
 
 ```text
 /crucible init             # create the labels runs use, detect your checks, show a starter config
-/crucible init --write     # write .pi/crucible.json; edit it, then merge it to main
+/crucible init --write     # write .pi/crucible.json (and AGENTS.md if missing); edit, then merge to main
 /crucible 12 --dry-run     # see the worktree, branch, lenses and args for issue #12
 /crucible 12               # create the worktree and launch the run
 ```
@@ -72,7 +72,9 @@ The agent in a pi session can do the same with the `crucible_plan` and `crucible
 example when you ask it to run an issue.
 
 An `AGENTS.md` with the project's stack, layout, rules and commands matters more than anything in the
-config: every stage reads it first. The run works in its own git worktree, labels anything that needs
+config: every stage reads it first. If the repository
+keeps its rules in `CLAUDE.md` or `CONTRIBUTING.md` instead, `/crucible init` offers an `AGENTS.md`
+that points to them. The run works in its own git worktree, labels anything that needs
 you `needs:human`, and opens a PR you review and merge. Your queue is `gh issue list -l needs:human`
 and `gh pr list -l needs:human`.
 
