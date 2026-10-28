@@ -48,7 +48,7 @@ test("every stage's prompt comes from the config, not the engine", async () => {
   assert.match(task("pr"), /Engine: seandavi\/pi-crucible@4d310bf \(with uncommitted changes\)/);
   assert.match(task("spec"), /Commit with: git commit\n/, "no commitAuthor: the worktree's identity");
   const all = calls.map((c) => c.task).join("\n");
-  assert.doesNotMatch(all, /bioc|zod|MCP tool|workers-best-practices|seandavi@/i);
+  assert.doesNotMatch(all, /bioc|zod|MCP tool|workers-best-practices|seandavi@|replace_seed|r-universe|ADR 0011/i);
   assert.equal(calls.find((c) => c.key === "implement")?.skill, undefined);
   assert.deepEqual(calls.find((c) => c.key === "implement")?.outputSchema && (calls.find((c) => c.key === "implement")!.outputSchema as { properties: { checks: { required: string[] } } }).properties.checks.required, ["test"]);
   assert.equal(result.pr, "https://github.com/o/r/pull/9");
@@ -449,4 +449,31 @@ test("with no checks configured, stages say so and integration still passes", as
   assert.match(task("implement"), /\(none configured: say so in summary/);
   assert.equal(result.draft, false);
   assert.equal(result.integration.status, "pass");
+});
+
+// ---- Premises (#36) --------------------------------------------------------------------
+test("the spec reads the issue's body and comments, and weighs the evidence against the design sources (#36)", async () => {
+  const { task } = await simulate(args, happy());
+  assert.ok(task("spec").includes("gh issue view 2 -R owner/repo prints its title and body"));
+  assert.ok(task("spec").includes("gh issue view 2 -R owner/repo --comments prints its comments"));
+  assert.ok(!task("spec").includes("Read the issue: gh issue view 2 -R owner/repo --comments."));
+  assert.match(task("spec"), /ADRs and code comments are inputs, not constraints/);
+  assert.match(task("spec"), /Start the Goal with what the issue reports/);
+  assert.match(task("spec"), /Never make the fix the issue asks for a non-goal because a document\s+describes the current behaviour/);
+  assert.match(task("spec"), /Set status "blocked" only for such a contradiction/);
+});
+
+test("the code lens checks that the change ends the reported behaviour (#36)", async () => {
+  const phrase = /fixes what the issue reported, not only how it is described/;
+  const first = await simulate(args, happy());
+  assert.match(first.task("review-code-r0"), phrase);
+  assert.ok(first.task("review-code-r0").includes("docs/specs/2-scaffold.md opens with the behaviour the issue reports"));
+  assert.doesNotMatch(first.task("review-ux-r0"), phrase);
+
+  const revised = await simulate(args, blockerOnCode);
+  assert.match(revised.task("review-code-r1"), phrase);
+
+  const integrated = await simulate(args, happy({ integrate: conflict }));
+  assert.match(integrated.task("review-code-r1"), /INTEGRATION FIX/);
+  assert.doesNotMatch(integrated.task("review-code-r1"), phrase);
 });

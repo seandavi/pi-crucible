@@ -38,6 +38,17 @@ missing skill is a warning, not a failure.
 reviewers are told to rate inherited defects by blast radius, so a bypassable guard is `major`
 even when nothing calls it yet. Added after #2, where four such findings came back as `minor`.
 
+**Premises:** ADRs, code comments and the other design sources are inputs to the spec, not
+constraints. The spec's Goal opens with what the issue reports, in its own words. When the
+issue's evidence contradicts a premise a document states, the spec says so in its Design
+section. It then proposes the change, or, when the document argues for the current behaviour
+on grounds the issue does not answer, stops with the contradiction as a blocking question. It
+never makes the requested fix a non-goal only because a document describes the current
+behaviour. In every review round but the integration fix's, the `code` lens also checks that
+the change ends the reported behaviour, not only how it is described; a miss is `major`.
+Added after bioc-registry #68, whose spec ruled out the gate fix the issue was about because
+an ADR recorded the config value (#36).
+
 **Finding ids** are `<lens>-r<round>-<n>`, unique across rounds.
 
 **The diff:** reviewers have no shell, so before each review round (round 0 and every
@@ -73,7 +84,8 @@ another revise round. The checks the PR reports are the post-merge ones, and
 its crucible record gets an Integration line. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 
-**Stops:** a spec with blocking questions stops the run before any code is written; an
+**Stops:** a spec with blocking questions (an open design question, or a premise the issue's
+evidence contradicts and a document argues for) stops the run before any code is written; an
 implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
 the run at the end. Integration never stops the run; see above. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
 comment why; the run's result says whether the flag succeeded (`flagged`). Every PR pi-crucible opens is labelled `needs:human` too; remove the label when you
@@ -247,6 +259,9 @@ subagent({ workflow: "pi-crucible", async: true, cwd: "<repo>", args: { repo, is
 - Integration: how often main had moved, how often the merge conflicted or a check failed after
   it, whether the fix round converged, and whether the code re-review found anything. Did a merge
   break still reach a human?
+- Premises (#36): how often a spec reports a contradicted premise, and whether it proposed
+  the change or stopped; how often the `code` lens's report check fires, and whether it was
+  right.
 - Time and tokens per stage, from the run receipts.
 - Severity calibration: how many `minor` findings had to be fixed before merge anyway? (#2: five,
   all in the upstream seam; the `seam` note and v2's fix-judging are the response.)
