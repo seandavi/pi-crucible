@@ -3,13 +3,15 @@
 //   - creates the labels a run uses that the repository lacks (a GitHub write, so it is explicit
 //     here and never a side effect of a run);
 //   - warns when AGENTS.md is missing (every stage reads it first);
-//   - detects check commands from package.json, justfile, pyproject.toml and Makefile;
+//   - detects check commands from the run: steps of pull_request CI workflows, falling back to
+//     package.json, justfile, pyproject.toml and Makefile;
 //   - when there is no config yet, prints a starter .pi/crucible.json, or writes it with --write.
 //
 // A first slice of #26 (engine defaults, check detection): the generic texts here become the
 // engine's default config layer there.
 
 import path from "node:path";
+import { checksFromWorkflows } from "./ci-checks.ts";
 import { crucibleFileErrors, type CrucibleFile } from "./config.ts";
 import { CONFIG_NAMES, repoFromRemote, type Exec } from "./launcher.ts";
 
@@ -55,6 +57,7 @@ export interface Check {
 /**
  * Check commands from the files a repository usually has, in a stable order; at most one per name.
  * `files` maps a repo-relative path to its text (absent files are missing keys).
+ * The fallback when CI yields no checks (`checksFromWorkflows` in ./ci-checks.ts).
  */
 export function detectChecks(files: Record<string, string | undefined>): Check[] {
   const out: Check[] = [];
@@ -123,7 +126,21 @@ async function out(exec: Exec, cmd: string, args: string[], cwd?: string): Promi
 export interface InitIO {
   exec: Exec;
   readText: (p: string) => Promise<string>;
+  /** Entry names in a directory (not paths); rejects when it does not exist. */
+  listDir: (p: string) => Promise<string[]>;
   writeText: (p: string, text: string) => Promise<void>;
+}
+
+/** The texts of .github/workflows/*.yml and *.yaml, keyed by repo-relative path. */
+async function readWorkflows(io: InitIO, repoRoot: string): Promise<Record<string, string>> {
+  const dir = ".github/workflows";
+  const names = await io.listDir(path.join(repoRoot, dir)).catch(() => [] as string[]);
+  const out: Record<string, string> = {};
+  for (const name of names.filter((n) => /\.ya?ml$/.test(n)).sort()) {
+    const text = await io.readText(path.join(repoRoot, dir, name)).catch(() => undefined);
+    if (text !== undefined) out[`${dir}/${name}`] = text;
+  }
+  return out;
 }
 
 /** Returns the lines to show the user, in order, each with a level. */
@@ -182,14 +199,20 @@ export async function init(io: InitIO, cwd: string, options: InitOptions): Promi
   if (config) {
     notes.push(["info", `Config: ${configName} exists; not changing it.${configName !== CONFIG_NAMES[0] ? ` Rename it to ${CONFIG_NAMES[0]}.` : ""}`]);
   } else {
-    const files: Record<string, string | undefined> = {};
-    for (const f of ["package.json", "justfile", "Justfile", "pyproject.toml", "Makefile"]) files[f] = await read(f);
-    const checks = detectChecks(files);
+    const ci = checksFromWorkflows(await readWorkflows(io, repoRoot));
+    if (ci.skipped.length) notes.push(["info", `Not offered as checks from CI:\n- ${ci.skipped.join("\n- ")}`]);
+    let checks = ci.checks;
+    if (!checks.length) {
+      const files: Record<string, string | undefined> = {};
+      for (const f of ["package.json", "justfile", "Justfile", "pyproject.toml", "Makefile"]) files[f] = await read(f);
+      checks = detectChecks(files);
+      if (checks.length) notes.push(["info", "No checks in pull_request workflows under .github/workflows; detected from package.json, justfile, pyproject.toml and Makefile instead."]);
+    }
     notes.push([
       checks.length ? "info" : "warning",
       checks.length
         ? `Detected checks: ${checks.map((c) => `${c.name} = \`${c.command}\` (${c.from})`).join("; ")}`
-        : "No checks detected (package.json scripts, justfile or Makefile recipes, pytest/ruff in pyproject.toml). Runs will report \"no checks configured\"; add checks to the config.",
+        : "No checks detected (run: steps of pull_request workflows in .github/workflows, package.json scripts, justfile or Makefile recipes, pytest/ruff in pyproject.toml). Runs will report \"no checks configured\"; add checks to the config.",
     ]);
     const text = JSON.stringify(starterConfig(checks), null, 2) + "\n";
     const target = path.join(repoRoot, CONFIG_NAMES[0]);

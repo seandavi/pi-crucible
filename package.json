@@ -35,7 +35,8 @@
     "schema": "node scripts/write-schema.ts"
   },
   "dependencies": {
-    "pi-subagents": "^0.80.0"
+    "pi-subagents": "^0.80.0",
+    "yaml": "^2.8.3"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
