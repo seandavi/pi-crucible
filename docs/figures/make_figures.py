@@ -108,20 +108,20 @@ def crucible_flow(theme: dict[str, str]) -> str:
 
     f.box(30, top, 240, h, "/crucible <issue>", [".pi/crucible.json @ main", "worktree + branch", "lenses from labels",
                                                 "args checked first"], "MUTED")
-    f.box(330, top, 240, h, "Spec · Opus", ["docs/specs/", "  <n>-<slug>.md", "one commit"], "VIOLET")
+    f.box(330, top, 240, h, "Spec · Opus", ["docs/specs/", "  <n>-<slug>.md", "issue read as data", "one commit"], "VIOLET")
     f.box(630, top, 240, h, "Implement · Sonnet", ["code + tests", "small commits", "configured checks"],
           "BLUE")
 
     f.group(930, 80, 280, 286, "review · parallel", "VIOLET")
     f.tag_box(950, 100, 240, 46, "diff · Haiku", "r<n>.diff", "CORAL")
-    for i, (lens, when) in enumerate([("code", "always"), ("ux", "review:ux"),
-                                      ("<lens>", "review:<lens>")]):
-        f.tag_box(950, 160 + i * 66, 240, 54, lens, when)
+    for i, (lens, when) in enumerate([("code", "always"), ("blind", "always · no spec"),
+                                      ("ux", "review:ux"), ("<lens>", "review:<lens>")]):
+        f.tag_box(950, 160 + i * 52, 240, 46, lens, when)
 
     f.box(1280, top, 240, h, "Integrate · Haiku", ["fetch, merge", "  origin/main", "run every check",
                                                    "never stops the run"], "CORAL")
     f.box(1580, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
-                                             "label needs:human"], "BLUE")
+                                             "label needs:human", "sensitive paths first"], "BLUE")
     for i, note in enumerate(["draft if blocker/major", "findings remain,", "checks fail or", "main does not merge"]):
         f.add(f.text(1580, top + h + 28 + i * 22, note, 14, theme["MUTED"], mono=True))
     f.box(1880, top, 210, h, "A human merges", ["review the PR", "drop needs:human", "never automated"],
@@ -133,7 +133,7 @@ def crucible_flow(theme: dict[str, str]) -> str:
     f.box(950, 470, 240, 140, "Revise · Sonnet", ["fix the root cause", "keep the spec in step",
                                                   "at most 2 rounds"], "BLUE")
     f.arrow([(1010, 369), (1010, 465)], "BLUE", "blocker/\nmajor", (1010, 417))
-    f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked", (1130, 420))
+    f.arrow([(1130, 468), (1130, 372)], "VIOLET", "re-review:\nlenses that\nasked + blind", (1130, 420))
 
     f.box(1280, 470, 240, 160, "Fix · Sonnet", ["conflict or failing", "  check: one round", "code lens re-reviews",
                                                 "  non-test fixes"], "BLUE")
@@ -174,7 +174,8 @@ def crucible_flow(theme: dict[str, str]) -> str:
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
     return f.svg(2120, 720, "The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff "
-                            "(Haiku) before each round of parallel review lenses (Opus), up to two "
+                            "(Haiku) before each round of parallel review lenses (Opus), one of them "
+                            "blind to the issue and spec, up to two "
                             "revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix "
                             "round), then a PR (Sonnet) that a human merges. Spec or implement can "
                             "stop and flag a human.")

@@ -27,7 +27,7 @@ test("missing, unknown and malformed args are all reported", () => {
     'arg "startAt" must be one of spec, implement, review',
     'arg "worktree" must be an absolute path',
     'missing required arg "slug"',
-    'unknown arg "typo" (known: repo, issue, slug, worktree, branch, lenses, maxRounds, seam, startAt, parent, config, engine)',
+    'unknown arg "typo" (known: repo, issue, slug, worktree, branch, lenses, maxRounds, seam, startAt, parent, config, engine, issueAuthor)',
   ]);
   const resolved = crucibleResource("x").resolve({});
   assert.ok("error" in resolved && resolved.error.includes('missing required arg "config"'));
@@ -42,6 +42,15 @@ test("config and engine are validated, and lenses must have config text", () => 
   assert.match(argErrors({ ...valid, config: { ...engineConfig, extra: 1 } }).join(), /unknown field\(s\) extra/);
   assert.match(argErrors({ ...valid, engine: { commit: "main" } }).join(), /arg "engine" must be/);
   assert.deepEqual(argErrors({ ...valid, lenses: ["code", "security"] }), ["no lens text in config.lenses for: security"]);
+  assert.deepEqual(argErrors({ ...valid, lenses: ["code", "blind"] }), ['arg "lenses" may not name "blind": the engine runs it on every issue']);
+  assert.match(argErrors({ ...valid, config: { ...engineConfig, lenses: { ...engineConfig.lenses, blind: "b" } } }).join(), /"blind" is the engine's built-in lens/);
+});
+
+test("issueAuthor must be a GitHub login", () => {
+  assert.deepEqual(argErrors({ ...valid, issueAuthor: "seandavi" }), []);
+  for (const bad of ["app/dependabot", "", "a b", 42, 'a"b']) {
+    assert.deepEqual(argErrors({ ...valid, issueAuthor: bad }), ['arg "issueAuthor" must be a GitHub login'], String(bad));
+  }
 });
 
 test("branch and worktree must be the ones the launcher derives", () => {

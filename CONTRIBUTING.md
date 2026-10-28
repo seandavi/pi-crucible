@@ -56,7 +56,7 @@ Labels the engine and its runs use:
 5. Keep things in step:
    - Args added or changed in `crucible.js` → update `src/resource.ts` in the same commit.
    - Config fields added or changed → update `src/config.ts`, run `npm run schema`, and update
-     Table 2 in `docs/crucible.md` and the files in `examples/`.
+     Table 4 in `docs/crucible.md` and the files in `examples/`.
    - Stages, models, lenses or stop rules changed → update `docs/crucible.md` and regenerate the
      figure with `python3 docs/figures/make_figures.py` (stdlib only; commit the SVGs).
 6. Open a PR with the template. Say what you could not verify.

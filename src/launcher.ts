@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { engineConfigOf, crucibleFileErrors, type CrucibleFile } from "./config.ts";
-import { argErrors } from "./resource.ts";
+import { argErrors, GITHUB_LOGIN } from "./resource.ts";
 
 export type Exec = (
   command: string,
@@ -115,6 +115,8 @@ export interface Issue {
   title: string;
   state: string;
   labels: string[];
+  /** The author's login, when it is a human account the spec stage can name in a comment filter. */
+  author?: string;
 }
 
 export interface Plan {
@@ -159,6 +161,7 @@ export function planLaunch(input: {
   if (options.startAt !== "spec") args.startAt = options.startAt;
   if (file.parent) args.parent = file.parent;
   if (input.engine) args.engine = input.engine;
+  if (issue.author) args.issueAuthor = issue.author;
   const errors = argErrors(args);
   if (errors.length) throw new Error(`the planned args are invalid: ${errors.join("; ")}`);
   const size = Buffer.byteLength(JSON.stringify(args));
@@ -306,10 +309,11 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   if (!repo) throw new Error('cannot tell the GitHub repo from the origin remote; set "repo" in .pi/crucible.json');
 
   const raw = JSON.parse(
-    await run(exec, "gh", ["issue", "view", String(options.issue), "-R", repo, "--json", "number,title,state,labels"]),
-  ) as { number: number; title: string; state: string; labels: { name: string }[] };
+    await run(exec, "gh", ["issue", "view", String(options.issue), "-R", repo, "--json", "number,title,state,labels,author"]),
+  ) as { number: number; title: string; state: string; labels: { name: string }[]; author?: { login: string; is_bot?: boolean } | null };
   if (raw.state !== "OPEN") throw new Error(`${repo}#${raw.number} is ${raw.state.toLowerCase()}`);
   const issue: Issue = { number: raw.number, title: raw.title, state: raw.state, labels: raw.labels.map((l) => l.name) };
+  if (raw.author && raw.author.is_bot !== true && GITHUB_LOGIN.test(raw.author.login)) issue.author = raw.author.login;
 
   const labels = JSON.parse(await run(exec, "gh", ["label", "list", "-R", repo, "--limit", "1000", "--json", "name"])) as { name: string }[];
   const labelCheck = labelProblems(config, repo, labels.map((l) => l.name));

@@ -64,6 +64,13 @@ test("worktree roots and repos resolve as documented", () => {
 const issue = { number: 4, title: "Reviewers always get the diff", state: "OPEN", labels: ["review:ux", "seam"] };
 const options = { issue: 4, startAt: "spec" as const, lenses: [], dryRun: false };
 
+test("planLaunch passes the issue's human author", () => {
+  const plan = (author?: string) => planLaunch({ file: crucibleFile, repoRoot: "/src/pi-crucible", repo: "seandavi/pi-crucible", issue: { ...issue, author }, options, configSource: "test" });
+  assert.equal(plan("alice").args.issueAuthor, "alice");
+  assert.deepEqual(argErrors(plan("alice").args), []);
+  assert.equal("issueAuthor" in plan(undefined).args, false);
+});
+
 test("planLaunch builds args the resource accepts", () => {
   const plan = planLaunch({ file: crucibleFile, repoRoot: "/src/pi-crucible", repo: "seandavi/pi-crucible", issue, options, engine: { commit: "abc1234" }, configSource: "test" });
   assert.equal(plan.branch, "issue-4-reviewers-always-get-the-diff");
@@ -121,6 +128,21 @@ test("prepare reads config, issue and engine commit from the main checkout", asy
   assert.deepEqual(plan.args.engine, { commit: "0123456789abcdef0123456789abcdef01234567" });
   assert.equal(plan.args.repo, "seandavi/pi-crucible");
   assert.equal(plan.configSource, "origin/main:.pi/crucible.json (fedcba9)");
+  const view = s.calls.find((c) => c.cmd === "gh" && c.args[0] === "issue")!;
+  assert.equal(view.args[view.args.indexOf("--json") + 1], "number,title,state,labels,author");
+  assert.equal("issueAuthor" in plan.args, false, "no author in the fake issue");
+});
+
+test("prepare passes a human author and drops bots and odd logins", async () => {
+  const read = async () => JSON.stringify(crucibleFile);
+  const withAuthor = (author: unknown) => [
+    [/^gh issue view 4 -R seandavi\/pi-crucible/, { stdout: JSON.stringify({ number: 4, title: issue.title, state: "OPEN", labels: [], author }) }],
+  ] as [RegExp, { stdout?: string }][];
+  const argsFor = async (author: unknown) => (await prepare(scripted(repoRules("OPEN", withAuthor(author))).exec, "/x", options, read)).args;
+  assert.equal((await argsFor({ login: "alice", is_bot: false })).issueAuthor, "alice");
+  assert.equal("issueAuthor" in (await argsFor({ login: "dependabot", is_bot: true })), false);
+  assert.equal("issueAuthor" in (await argsFor({ login: "app/dependabot", is_bot: false })), false);
+  assert.equal("issueAuthor" in (await argsFor(null)), false);
 });
 
 test("prepare refuses invalid config and closed issues with actionable errors", async () => {
@@ -373,6 +395,13 @@ test("defaultLenses must include code, and the commit identity cannot carry shel
   assert.ok(author("A\nB", "a@b.c") > 0);
   assert.ok(author("A B", "a@b;git push -f origin main") > 0);
   assert.ok(author("A B", "a@b$(id)") > 0);
+  const paths = (sensitivePaths: unknown) => crucibleFileErrors({ ...crucibleFile, sensitivePaths }).length;
+  assert.equal(paths(["src/auth/", "**/*.pem"]), 0);
+  assert.ok(paths(["/etc/passwd"]) > 0, "a leading /");
+  assert.ok(paths(["a\nb"]) > 0, "a newline");
+  assert.ok(paths(Array.from({ length: 33 }, (_, i) => `p${i}/`)) > 0, "33 entries");
+  assert.equal(paths(Array.from({ length: 32 }, (_, i) => `p${i}/`)), 0);
+  assert.deepEqual(crucibleFileErrors({ ...crucibleFile, lenses: { ...crucibleFile.lenses, blind: "b" } }), ['/lenses/blind: "blind" is the engine\'s built-in lens; use another name']);
 });
 
 test("the pre-rename config name still works, with a warning to rename it", async () => {

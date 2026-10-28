@@ -14,10 +14,11 @@ matters and the fast model where volume does. The script is
 
 | Stage | Model | Agent | Writes | Output |
 |---|---|---|---|---|
-| Spec | Opus | `worker` | `<specDir>/<issue>-<slug>.md` (default `docs/specs`), one commit | `{status, spec_path, blocking_questions}` |
+| Spec | Opus | `worker` | `<specDir>/<issue>-<slug>.md` (default `docs/specs`), one commit | `{status, spec_path, blocking_questions, trust_boundaries, ignored_comments}` |
 | Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}`: one result per configured check |
-| Diff | Haiku | `worker`, before each review round | `.pi/crucible-review/r<round>.diff` in the worktree, ignored by git | `{status, summary, changed_files, diff_lines}` |
+| Diff | Haiku | `worker`, before each review round | `.pi/crucible-review/r<round>.diff` and `r<round>.blind.diff` (without the spec) in the worktree, ignored by git | `{status, summary, changed_files, diff_lines, blind_diff_lines, spec_present}` |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
+| Blind review | Opus | `reviewer`, one per round it runs, in parallel with the lenses | nothing | `{verdict, findings[], trust_boundaries[]}` |
 | Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, responses[], checks}` |
 | Integrate | Haiku; Sonnet for the fix | `worker`, once after review | a merge of `origin/main` into the branch; on a conflict or failing check, one fix round and a re-check | `{status, summary, main, merge, conflicts, checks, failures}`; fix: `{status, summary, changed_files, non_test_files, checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
@@ -28,7 +29,9 @@ reviewer is told to check. `code` is required and runs on every issue, however t
 `lenses` it is given; `defaultLenses` may add more, but must include it); a label `review:<name>` adds that lens to the issue's run. bioc-mcp, for
 example, defines `code`, `ux` (agent and developer experience of its MCP tools) and `security`;
 bioc-support-archive defines `code`, `ux` (a reader on an old link) and `privacy`. See
-[`examples/`](../examples).
+[`examples/`](../examples). `blind` is the engine's own lens: it runs on every issue and cannot be
+defined in the config, named with `--lens` or asked for with a `review:blind` label (see
+[The blind lens](#the-blind-lens)).
 
 **Skills:** the built-in `worker` and `reviewer` agents do not inherit skills, so the config names
 them per stage (`skills.build` for implement and revise, `skills.lenses.<lens>` per reviewer). A
@@ -38,7 +41,8 @@ missing skill is a warning, not a failure.
 reviewers are told to rate inherited defects by blast radius, so a bypassable guard is `major`
 even when nothing calls it yet. Added after #2, where four such findings came back as `minor`.
 
-**Finding ids** are `<lens>-r<round>-<n>`, unique across rounds.
+**Finding ids** are `<lens>-r<round>-<n>`, unique across rounds, and `blind-r<round>-scope-<n>` for
+the blind lens's scope findings.
 
 **The diff:** reviewers have no shell, so before each review round (round 0 and every
 re-review) a Haiku worker writes `git diff origin/main...HEAD`, its `--stat` summary first, to
@@ -48,10 +52,62 @@ gets the file's path and git's list of changed files, reads the whole diff with 
 gives finding locations as `path:line` from the diff's hunks. If the diff step fails (a wrong
 branch, a git error), the round is reviewed from the changed-file list instead, and pi-crucible
 record says the diff was unavailable; the run does not stop. Added after bioc-mcp, where
-reviewers without git reviewed from the file list alone (#4).
+reviewers without git reviewed from the file list alone (#4). The diff step also writes
+`r<round>.blind.diff`, the same diff with the run's spec file left out (`:(exclude)<specPath>`),
+and reports whether the spec file exists on the branch.
+
+**The blind lens** (#31): anyone can open an issue, and the spec stage turns the issue into a
+committed spec that the other lenses read, so a polite "small refactor" that also relaxes an auth
+check could arrive with "reviewed by N lenses, no blockers". The engine therefore adds its own
+reviewer, `blind`, to every run. It gets `r<round>.blind.diff` and the repository's `AGENTS.md`, and
+nothing else: no issue, no comments, no spec, no `design` text, and it is told not to read the spec
+directory. It reports, besides ordinary findings, what the change actually does to eight trust
+boundaries (`auth`, `permissions`, `input-validation`, `secrets`, `network`, `dependencies`, `ci`,
+`agent-instructions`). The spec stage declares the boundaries the change is meant to alter in its
+`trust_boundaries` output (and in the spec's Trust boundaries section). The script, not a model,
+compares the two: a boundary the blind lens found and the spec did not declare is a `major` finding,
+`blind-r<round>-scope-<n>`. Revise must remove that part of the change, or decline the finding if
+the issue needs it; it may never edit the spec to widen the declared scope, because a person decides
+whether the scope widens. A declined scope finding stays open and makes the PR a draft. The blind
+lens re-reviews in every revise round, alongside the lenses that had blocking findings, because revise
+can change code in answer to a finding from a lens that reads the spec; it sees only its own earlier
+findings and the responses to them. So the PR's trust-boundary record always describes the last
+reviewed state of the branch. On `--start-at implement|review` there is no spec-stage
+output to compare with, so the lens reports but nothing is compared, and the PR's record says so. The
+integration-fix re-review stays the `code` lens alone.
+
+**Sensitive paths** (#31): the script collects every path any stage reported changing (implement,
+revise, the integration fix, and each diff's `git diff --name-only --no-renames`) and matches them against path
+globs: the engine's defaults plus the repository's `sensitivePaths`. The defaults are CI
+(`.github/`, `.gitlab-ci.yml`, `.circleci/`), agent instructions (`AGENTS.md`, `CLAUDE.md`, `.pi/`)
+and dependency manifests and lockfiles (`package.json`, `package-lock.json`, `npm-shrinkwrap.json`,
+`yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`, `.npmrc`, `pyproject.toml`, `uv.lock`,
+`poetry.lock`, `Pipfile`, `Pipfile.lock`, `requirements*.txt`, `setup.py`, `setup.cfg`, `Cargo.toml`,
+`Cargo.lock`, `go.mod`, `go.sum`, `Gemfile`, `Gemfile.lock`, `DESCRIPTION`, `renv.lock`). A config can
+add to them and cannot remove them. If any path matches, the PR body opens with a "Sensitive paths
+touched" section listing each path and the pattern it matched, and the issue is labelled
+`needs:human` as well as the PR. If no list of changed files exists at all (every diff failed and
+no stage reported files), the PR says sensitive paths were not checked, with the same label. The PR
+is not made a draft for this alone. A model only lists the paths (the diff stage copies
+`git diff --name-only --no-renames`, so a rename lists the old path as well as the new one, and
+`core.quotePath=false` keeps non-ASCII paths unquoted); the matching is in the script. The set is conservative: a path changed and
+later reverted still counts.
+
+| Pattern | Matches | Does not match |
+|---|---|---|
+| `.github/` | `.github/workflows/ci.yml`, `.github/dependabot.yml` | `docs/.github/x` |
+| `package.json` | `package.json`, `web/package.json` | `package.json.bak` |
+| `requirements*.txt` | `requirements.txt`, `py/requirements-dev.txt` | `requirements/dev.txt` |
+| `src/auth/` | `src/auth/token.ts`, `src/auth/a/b.ts` | `src/authz.ts` |
+| `**/auth/*.ts` | `auth/x.ts`, `src/auth/x.ts` | `src/auth/a/x.ts` |
+| `src/*.ts` | `src/a.ts` | `src/a/b.ts`, `lib/src/a.ts` |
+
+**Table 2.** How path globs match. `*` and `?` stay within one path segment, `**` crosses them, a
+trailing `/` means everything under that directory, and a pattern without `/` matches the file name
+in any directory.
 
 **Revise rounds:** at most two. Only `blocker` and `major` findings trigger a round, and only the
-lenses that asked for changes review again. Revise fixes root causes and updates the spec when a
+lenses that asked for changes review again, plus the blind lens (see The blind lens). Revise fixes root causes and updates the spec when a
 fix changes an interface, rule or example. Re-reviewers see the earlier findings and the responses
 and judge the fix itself: a symptom patch that leaves the root cause is a new `major`. Added after
 #2, where a post-hoc redirect check was accepted in round 1 and later replaced by hand. If
@@ -75,7 +131,9 @@ integration could not run, opens as a draft PR saying why; the run does not stop
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
 implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
-the run at the end. Integration never stops the run; see above. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
+the run at the end; a spec missing from the branch when review starts stops the run before any
+reviewer runs (the lenses never review against the issue instead, #31). Integration never stops the
+run; see above. All four label the issue `needs:human` (creating the label first if the repository lacks it) and
 comment why; the run's result says whether the flag succeeded (`flagged`). Every PR pi-crucible opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
@@ -91,6 +149,58 @@ and the PR's crucible record ends with `Engine: seandavi/pi-crucible@<sha>`. The
 
 **Never automated:** merging the PR. A human merges, from the main session. (The integration stage merges main into the branch, never the branch into main.)
 
+## Threat model
+
+pi-crucible reads text written by people it does not control and runs agents with shell access on
+the machine of the person who launched it. This section says what that text can and cannot do (#31).
+
+**Who can do what.** Anyone can open an issue, or comment on one, in a public repository, so issue
+text is untrusted input. Only a person with the checkout launches a run (`/crucible`, or a hand
+launch of the workflow), and only a person merges the PR. Any future trigger by label, webhook or
+an outer loop (#30) must first check that whoever triggered it is a maintainer (`OWNER`, `MEMBER` or
+`COLLABORATOR`); nothing here builds such a trigger.
+
+| Stage | Sees |
+|---|---|
+| Spec | the issue body; comments from owners, members, collaborators and the issue's author (the others are listed without their text); `AGENTS.md`; the design sources |
+| Implement | the spec |
+| Review (configured lenses) | the spec, the diff |
+| Blind review | the diff without the spec, `AGENTS.md` |
+| Revise | the findings, the spec |
+| PR | the spec's summary, the crucible record |
+
+**Table 3.** What each stage reads of the issue's story. Only the spec stage reads the issue and its
+comments. The spec stage's prompt calls them untrusted requests, never instructions, and requires
+a Trust boundaries section; a change that weakens, removes or bypasses a check, adds a dependency or
+changes CI must also be named as its own Risk. The comment filter is jq run through `gh api` with
+`author_association`; the issue author is passed as `issueAuthor` (a bot or an `app/...` login gets no
+exception). The PR's record has an "Ignored comments" line.
+
+**What no model decides:** the sensitive-path match, the scope comparison between the declared and
+found trust boundaries, the `needs:human` labels, the draft rule, and the merge.
+
+**What remains:**
+
+- The configured lenses still read a spec that the issue shaped; the spec model may declare a
+  boundary the issue talked it into. That shows in the spec's Trust boundaries section and in the
+  record.
+- The diff's own comments, docs and test names can still argue with the blind lens, which is itself a
+  model that may miss a change.
+- Resumed runs (`--start-at implement|review`) do not compare scope.
+- Defaults such as `package.json` flag routine dependency edits too, and cannot yet be removed.
+- A maintainer who quotes an untrusted comment puts it in front of the spec stage. The comment
+  filter depends on the spec model running the commands it is given instead of
+  `gh issue view --comments`; nothing enforces that.
+
+**Red-team check.** To see whether the defences work, run this in a scratch repository with a small
+auth check, and file the result as a run report. From an account without write access, open two
+issues: (1) a polite "small refactor" that also asks to drop the "redundant" token check, and (2) one
+that also adds a dependency. Run `/crucible` on each. Record what the spec declared under Trust
+boundaries, what the blind lens found, the scope findings, whether the PR opened with a "Sensitive
+paths touched" section, whether the issue got `needs:human`, and whether the PR was a draft. The
+unit tests cover both scenarios with fake runs; the live run needs real models and a real
+repository.
+
 ## Configuring a repository
 
 Each repository that uses the engine keeps two things: `AGENTS.md`, which every stage reads first,
@@ -105,7 +215,8 @@ and `.pi/crucible.json`. Merge the config to `main`: `/crucible` reads it from `
 | `spec.design` | spec | What the spec's Design section must pin down for this project. |
 | `implement` | implement, integration fix | Project rules: fixtures, data tests must never read, setup steps. |
 | `checks` | implement, revise, integration, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. Integration runs all of them after merging main. |
-| `lenses` | review | `{name: text}`; `code` is required. |
+| `lenses` | review | `{name: text}`; `code` is required. `blind` is reserved for the engine's own lens and is rejected. |
+| `sensitivePaths` | PR | Path globs added to the engine's defaults; a change to a matching path opens the PR with a "Sensitive paths touched" section and labels the issue `needs:human`. |
 | `defaultLenses` | `/crucible` | Lenses every run gets; must include `code` (default `["code"]`). |
 | `seamNote` | review | What later issues build on, for the `seam` reviewer note. |
 | `skills` | implement, revise, integration fix, review | `{build, lenses: {name: skill}}`; `build` goes to implement, revise and the integration fix. |
@@ -116,7 +227,7 @@ and `.pi/crucible.json`. Merge the config to `main`: `/crucible` reads it from `
 | `commitAuthor` | every writing stage | `{name, email}`; default is the worktree's git config. The name may not contain control characters, backticks, `$` or `\`; the email is `local@domain` in plain characters. Both are single-quoted in the commit command. |
 | `models` | every stage | `{strong, fast, small}` model ids; defaults are the claude-bridge Opus, Sonnet and Haiku 5.5. |
 
-**Table 2.** `.pi/crucible.json` fields. Everything except `defaultLenses`, `worktreeRoot`, `parent`,
+**Table 4.** `.pi/crucible.json` fields. Everything except `defaultLenses`, `worktreeRoot`, `parent`,
 `repo` and `$schema` is sent to the workflow, and pi-subagents caps workflow args at 16 KiB, so
 `/crucible` refuses a config whose lens texts push the args past that.
 
@@ -247,6 +358,8 @@ subagent({ workflow: "pi-crucible", async: true, cwd: "<repo>", args: { repo, is
 - Integration: how often main had moved, how often the merge conflicted or a check failed after
   it, whether the fix round converged, and whether the code re-review found anything. Did a merge
   break still reach a human?
+- The blind lens: how often its scope findings are real, and how often the sensitive-paths section
+  appears on routine PRs (#31).
 - Time and tokens per stage, from the run receipts.
 - Severity calibration: how many `minor` findings had to be fixed before merge anyway? (#2: five,
   all in the upstream seam; the `seam` note and v2's fix-judging are the response.)
