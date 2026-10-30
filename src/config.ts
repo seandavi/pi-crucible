@@ -44,7 +44,7 @@ export const EngineConfig = Type.Object(
             minLength: 1,
             maxLength: 500,
             pattern: "^[^\\x00]*\\S[^\\x00]*$",
-            description: "Shell command, run with sh from the worktree root. Integration runs it on the host exactly as written (granted from origin/main's config, never from a branch).",
+            description: "Shell command, run with sh from the worktree root. Integration runs it on the host exactly as written, granted only when /crucible read the config from origin/main.",
           }),
         },
         { additionalProperties: false },

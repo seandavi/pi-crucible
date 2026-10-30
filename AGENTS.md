@@ -15,7 +15,9 @@ This repo is the pi-crucible engine itself. Read [docs/crucible.md](docs/crucibl
   finished stages. Except after editing `workflows/crucible.js`: the resource must resolve to the
   same script, so the auto-resume is refused (pi-subagents docs/workflows.md, "Failed lane recovery").
   Don't edit the script during a run; if you did, relaunch by hand with `options.reuseFrom`, with
-  the issue's worktree as `cwd` (the host commands run there).
+  the issue's worktree as `cwd` (the host commands run there). A resume also needs the check grant
+  `/crucible` recorded in the session that launched it; from another session it is refused, so
+  relaunch with `/crucible <n> --start-at implement` (or `review`).
 - Changes here affect every repo that uses the engine: keep the project-specific parts in each
   repo's config, not in the engine.
 - Small, well-described commits with a `Co-Authored-By` trailer when an agent wrote them. Never

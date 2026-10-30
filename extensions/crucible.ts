@@ -8,7 +8,9 @@
 //
 // Registration is per session (pi-subagents' rule): register on session_start, dispose on
 // session_shutdown. The script is re-read on each session_start, so a local checkout picks up
-// edits after /reload.
+// edits after /reload. So are the check grants (src/resource.ts CheckGrants): each launch from an
+// origin/main config appends one as a session entry, and session_start rebuilds them from the
+// entries, so a run that auto-resumes after /reload resolves to the script it started with.
 
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -17,8 +19,17 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { Type } from "typebox";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
 import { init, parseInit } from "../src/init.ts";
-import { ensureWorktree, parseCommand, prepare, STARTS, type CommandOptions, type Plan } from "../src/launcher.ts";
-import { crucibleResource, LEGACY_RESOURCE_NAME, loadScript, RESOURCE_NAME } from "../src/resource.ts";
+import { ensureWorktree, parseCommand, prepare, resolveWorktree, STARTS, type CommandOptions, type Plan } from "../src/launcher.ts";
+import {
+  CHECK_GRANT_ENTRY,
+  CheckGrants,
+  crucibleResource,
+  LEGACY_RESOURCE_NAME,
+  loadScript,
+  RESOURCE_NAME,
+  type CheckGrant,
+} from "../src/resource.ts";
+import type { EngineConfig } from "../src/config.ts";
 
 const RPC_REQUEST = "subagents:rpc:v1:request";
 const RPC_REPLY = "subagents:rpc:v1:reply:";
@@ -68,6 +79,7 @@ const toolOptions = (p: { issue: number; startAt?: string; lenses?: string[] }, 
 
 export default function (pi: ExtensionAPI) {
   let registrations: { dispose(): void }[] = [];
+  let checkGrants = new CheckGrants();
   const dispose = () => {
     for (const r of registrations) r.dispose();
     registrations = [];
@@ -76,9 +88,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     dispose();
     const script = loadScript();
+    checkGrants = CheckGrants.fromEntries(ctx.sessionManager.getEntries());
     // The legacy name keeps launches written before the rename (#23) working.
     registrations = [RESOURCE_NAME, LEGACY_RESOURCE_NAME].map((name) =>
-      registerWorkflowResource({ sessionId: ctx.sessionManager.getSessionId(), definition: crucibleResource(script, name) }),
+      registerWorkflowResource({ sessionId: ctx.sessionManager.getSessionId(), definition: crucibleResource(script, name, checkGrants) }),
     );
   });
 
@@ -157,6 +170,13 @@ export default function (pi: ExtensionAPI) {
   /** Prepare the planned worktree and start the run. Shared by /crucible and crucible_launch. */
   async function launch(plan: Plan): Promise<{ note: string; id?: string }> {
     const note = await ensureWorktree(exec, plan, exists);
+    await resolveWorktree(exec, plan);
+    // Only a config read from origin/main may grant its checks; the run's resolve compares with this.
+    if (plan.configOnMain) {
+      const grant: CheckGrant = { worktree: plan.args.worktree as string, checks: (plan.args.config as EngineConfig).checks };
+      pi.appendEntry(CHECK_GRANT_ENTRY, grant);
+      checkGrants.record(grant);
+    }
     // The workflow cwd is where its host commands run (pi-subagents has no per-step cwd): the worktree.
     const data = (await rpc(pi, "spawn", { workflow: RESOURCE_NAME, args: plan.args, cwd: plan.worktree })) as {
       details?: { asyncId?: string; runId?: string };

@@ -3,6 +3,7 @@
 //   parseCommand  "/crucible" arguments → issue number and options
 //   prepare       fetches origin; reads .pi/crucible.json from origin/main, the issue, its branch and the engine commit; plans the launch
 //   ensureWorktree creates (or reuses) the issue's worktree and branch
+//   resolveWorktree points the plan at the worktree's real path
 //
 // Side effects go through an injected `exec`, so tests can run without git, gh or a network.
 
@@ -124,6 +125,8 @@ export interface Plan {
   startAt: StartAt;
   /** Where the config was read from, for the dry run. */
   configSource: string;
+  /** The config is origin/main's, so the launch may grant its checks as host commands. */
+  configOnMain: boolean;
   args: Record<string, unknown>;
   warnings: string[];
 }
@@ -137,6 +140,7 @@ export function planLaunch(input: {
   existingBranch?: string;
   engine?: { commit: string; dirty?: boolean };
   configSource: string;
+  configOnMain?: boolean;
   home?: string;
 }): Plan {
   const { file, repoRoot, repo, issue, options } = input;
@@ -163,7 +167,7 @@ export function planLaunch(input: {
   if (errors.length) throw new Error(`the planned args are invalid: ${errors.join("; ")}`);
   const size = Buffer.byteLength(JSON.stringify(args));
   if (size > 16 * 1024) throw new Error(`args are ${size} bytes; pi-subagents allows 16384. Shorten lens texts in .pi/crucible.json.`);
-  return { repoRoot, worktree, branch, startAt: options.startAt, configSource: input.configSource, args, warnings };
+  return { repoRoot, worktree, branch, startAt: options.startAt, configSource: input.configSource, configOnMain: input.configOnMain ?? false, args, warnings };
 }
 
 async function run(exec: Exec, cmd: string, args: string[], cwd?: string): Promise<string> {
@@ -221,6 +225,8 @@ export interface LoadedConfig {
   file: unknown;
   /** Where it came from, for messages: "origin/main:.pi/crucible.json (abc1234)" or "<path> (working tree)". */
   source: string;
+  /** Read from origin/main, not the working tree. */
+  onMain: boolean;
   warnings: string[];
 }
 
@@ -260,7 +266,7 @@ export async function readCrucibleFile(
         typeof local === "string" && local.trim() !== text
           ? [`${path.join(repoRoot, name)} differs from ${source}; this run uses origin/main's. Merge the change to main to use it.`]
           : [];
-      return { file: parse(text, source), source, warnings: [...legacy(name), ...differs] };
+      return { file: parse(text, source), source, onMain: true, warnings: [...legacy(name), ...differs] };
     }
   }
   const why = commit ? `origin/main has no ${CONFIG_NAMES[0]}` : "there is no origin/main";
@@ -276,7 +282,11 @@ export async function readCrucibleFile(
     return {
       file: parse(local, source),
       source,
-      warnings: [...legacy(name), `${why}; using ${source}, which has not been reviewed on main. Merge it to main.`],
+      onMain: false,
+      warnings: [
+        ...legacy(name),
+        `${why}; using ${source}, which has not been reviewed on main, so its checks are not granted as host commands and integration will report an error. Merge it to main.`,
+      ],
     };
   }
   throw new Error(`no config to read: ${why}, and ${failures.join("; ")}. Run /crucible init, or see docs/crucible.md.`);
@@ -319,7 +329,7 @@ export async function prepare(exec: Exec, cwd: string, options: CommandOptions, 
   const existingBranch = (await findIssueBranch(exec, repoRoot, worktree, issue.number)) ?? undefined;
 
   const engine = await engineCommit(exec, PACKAGE_ROOT);
-  const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine, configSource: loaded.source });
+  const plan = planLaunch({ file: config, repoRoot, repo, issue, options, existingBranch, engine, configSource: loaded.source, configOnMain: loaded.onMain });
   plan.warnings = [...fetchWarning, ...loaded.warnings, ...plan.warnings, ...labelCheck.warnings];
   return plan;
 }
@@ -345,4 +355,18 @@ export async function ensureWorktree(exec: Exec, plan: Plan, exists: (p: string)
   if (startAt !== "spec") throw new Error(`--start-at ${startAt} needs an existing branch ${branch}, locally or on origin`);
   await run(exec, "git", ["worktree", "add", "-b", branch, worktree, "origin/main"], repoRoot);
   return `added ${worktree} on a new branch ${branch} from origin/main`;
+}
+
+/**
+ * Point the plan at the worktree's real path, as git prints it: the workflow's first host step
+ * compares the two, so a symlink anywhere in the planned path would otherwise fail every run.
+ */
+export async function resolveWorktree(exec: Exec, plan: Plan): Promise<void> {
+  const real = await run(exec, "git", ["-C", plan.worktree, "rev-parse", "--show-toplevel"]);
+  if (real === plan.worktree) return;
+  const args = { ...plan.args, worktree: real };
+  const errors = argErrors(args);
+  if (errors.length) throw new Error(`${plan.worktree} is ${real} on disk, which pi-crucible cannot use: ${errors.join("; ")}`);
+  plan.worktree = real;
+  plan.args = args;
 }

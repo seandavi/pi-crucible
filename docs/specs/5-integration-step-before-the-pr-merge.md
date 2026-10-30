@@ -6,8 +6,11 @@ migrations). Labelled `seam`: every consuming repository's runs go through this 
 
 > **Changed by #57.** The fetch and the checks are now host commands (`runs.host`), and so is
 > recording main and the branch head (`git rev-parse --short origin/main HEAD`, which adds `head`
-> to the Integration record). The Haiku worker only merges `origin/main` (or reports the
-> conflicts), and its report is `{status, summary, merge, conflicts}`. A check passes on exit 0. It
+> to the Integration record). The fetch step also prints `origin/main`'s commit, which the merge
+> task names, so a resume after main moved merges again. The Haiku worker only merges
+> `origin/main` (or reports the conflicts), and its report is `{status, summary, merge, conflicts}`.
+> The checks are granted only when `/crucible` read the config from `origin/main` in the session
+> (a hand launch or a working-tree config gets none, and integration is an error). A check passes on exit 0. It
 > fails on a nonzero exit or on running past 20 minutes. A check that cannot run is an
 > integration error. The fix round gets each failing check's exit code and the first 200
 > characters of its output (all pi-subagents gives the script), and is told to run the failing

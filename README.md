@@ -38,7 +38,7 @@ re-reviews a fix that touched non-test code. Green pills are the
 |---|---|---|
 | Spec | Opus | `docs/specs/<issue>-<slug>.md`, one commit |
 | Implement | Sonnet | code and tests, in small commits |
-| Diff | none: a host command, before each review round | `host-diff-r<round>.log` in the run's artifacts (nothing in the repository) |
+| Diff | none: a host command, before each review round | `.pi/crucible-review/r<round>.diff`, ignored by git (never committed) |
 | Review | Opus, one reviewer per lens | nothing (read-only); findings with ids and severities |
 | Revise | Sonnet | fixes for blocker/major findings, spec kept in step |
 | Integrate | Haiku merges, host commands fetch and run the checks; Sonnet for one fix round | a merge commit from `origin/main`; fixes if the merge or the checks broke |

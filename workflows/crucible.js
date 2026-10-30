@@ -159,20 +159,28 @@ const reviewSchema = {
 };
 
 // ---- Host commands ---------------------------------------------------------------------
-// runs.host runs only what src/resource.ts grants: CRUCIBLE_HOST, key → { command, timeoutMs }, each
-// key once per run, with sh in the workflow cwd. Launched by path there is no table and no authority.
+// runs.host runs only what src/resource.ts grants: CRUCIBLE_HOST, key → { command, timeoutMs,
+// output? }, each key once per run, with sh in the workflow cwd. Launched by path there is no table
+// and no authority; the checks are in the table only when /crucible read them from origin/main.
 // A command that exits nonzero or times out rejects with "Command exited with code N. <the start of
 // its output>" or "Command timed out after …ms." (200 characters at most); stdout comes back as its
-// first 4 KiB, and the full output (its first 1 MiB) is saved in the run's artifacts at outputPath.
+// first 4 KiB, and the full stdout and stderr (the first 1 MiB) are saved at `output` in the
+// worktree, or else in the run's artifacts.
 const HOST = typeof CRUCIBLE_HOST !== "undefined" ? CRUCIBLE_HOST : null;
 const NO_HOST = "launched without the pi-crucible resource; host steps unavailable";
+const NO_CHECK_GRANT = "the checks are granted only for a config /crucible read from origin/main in this session; relaunch with /crucible";
 // { ok: true, stdout, outputPath } or { ok: false, failed, exitCode, error }: failed when the command
 // ran and exited nonzero (exitCode N, or "unknown" after a signal) or timed out (exitCode "timeout");
 // otherwise it could not run.
 function host(key) {
   const step = HOST && HOST[key];
-  if (!step) return Promise.resolve({ ok: false, failed: false, exitCode: null, error: HOST ? `no host grant for ${key}` : NO_HOST });
-  return runs.host(key, { kind: "command", command: step.command, timeoutMs: step.timeoutMs }).then(
+  if (!step) {
+    const error = !HOST ? NO_HOST : /^(re)?check-/.test(key) ? `no host grant for ${key}: ${NO_CHECK_GRANT}` : `no host grant for ${key}`;
+    return Promise.resolve({ ok: false, failed: false, exitCode: null, error });
+  }
+  const params = { kind: "command", command: step.command, timeoutMs: step.timeoutMs };
+  if (step.output) params.output = step.output;
+  return runs.host(key, params).then(
     (r) => ({ ok: true, stdout: String(r.stdout || ""), outputPath: String(r.outputPath || "") }),
     (e) => {
       const error = String((e && e.message) || e).replace(/^Host command '[^']*' failed: /, "");
@@ -191,8 +199,11 @@ const hostBlocked = await host("host-worktree").then((r) => {
   return seen === `${cwd}\n${branch}` ? "" : `the workflow is not running in ${cwd} on ${branch} (git printed ${JSON.stringify(seen.slice(0, 200))}); host steps skipped`;
 });
 const hostStep = (key) => (hostBlocked ? Promise.resolve({ ok: false, failed: false, exitCode: null, error: hostBlocked }) : host(key));
+// Reported text in inline code, so mentions and markdown in it do not render.
+const inlineCode = (text) => `\`${String(text).replace(/`/g, "'")}\``;
 
-// Label the issue (or the branch's PR) needs:human and say why. Used on every stop.
+// Label the issue (or the branch's PR) needs:human and say why. Used on every stop. The comment is
+// a quoted heredoc, so the shell posts `why` (which holds reported text) as written.
 function flagHuman(key, why) {
   return runs.run(key, {
     label: `Flag issue #${issue} for a human`,
@@ -205,11 +216,13 @@ Do not change any file. Make sure the label exists, then add it (the first comma
 if the repository already has the label):
   gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
   gh issue edit ${issue} -R ${repo} --add-label ${NEEDS_HUMAN}
-then post this as a comment on the issue with gh issue comment ${issue} -R ${repo} --body-file -:
-
+then post the comment by running this command exactly as written (a quoted heredoc: the shell
+expands nothing in it, so the comment is posted verbatim):
+gh issue comment ${issue} -R ${repo} --body-file - <<'CRUCIBLE_EOF'
 pi-crucible stopped and needs a human.
 
-${why}`,
+${String(why).replace(/CRUCIBLE_EOF/g, "CRUCIBLE-EOF")}
+CRUCIBLE_EOF`,
   });
 }
 
@@ -287,25 +300,37 @@ ${checkList}
 }
 
 // ---- 3a. Diff (before each review batch) ---------------------------------------------
-// Reviewers have no shell, so the host writes the branch's diff to the step's log, which they read:
-// git diff --numstat --shortstat -p origin/main...HEAD, i.e. one line per file, a summary line, the
-// patch. Nothing is written into the worktree.
-const diffRun = (round) => hostStep(`host-diff-r${round}`);
+// Reviewers have no shell, so the host writes the branch's diff to .pi/crucible-review/r<round>.diff
+// in the worktree (the table's `output`), which they read: git diff --numstat --shortstat -p
+// origin/main...HEAD, i.e. one line per file, a summary line, the patch. Before the first, the host
+// writes the directory's `*` .gitignore, so no stage commits it. The path is the same in every run,
+// so a resumed run's reviewer tasks match and their results are reused.
+let reviewIgnore = null;
+function diffRun(round) {
+  reviewIgnore = reviewIgnore || hostStep("host-review-ignore");
+  return reviewIgnore.then((ignored) => (ignored.ok ? hostStep(`host-diff-r${round}`) : ignored));
+}
+const diffPath = (round) => `${cwd}/${HOST[`host-diff-r${round}`].output}`;
 
 // What a round's reviewers get: the diff file and git's list of changed files, or why there is
 // none. The list and the counts come from stdout's first 4 KiB; when the summary line is not in it,
 // the list is partial and the counts unknown. `record` is the round's entry in the PR's crucible
 // record; its lines are git's insertions and deletions.
-function diffFor(result) {
+function diffFor(result, round) {
   if (!result.ok) return { path: null, files: [], partial: false, counts: "", record: `unavailable: ${result.error.slice(0, 200)}` };
   const lines = result.stdout.split("\n");
-  const stat = lines.map((l) => /^ (\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?$/.exec(l)).find(Boolean);
+  const statAt = lines.findIndex((l) => /^ \d+ files? changed/.test(l));
+  const stat = statAt >= 0 ? /^ (\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?$/.exec(lines[statAt]) : null;
   const partial = !stat && result.stdout.trim() !== "";
-  // A cut stdout ends mid-line: drop that line.
-  const files = (partial ? lines.slice(0, -1) : lines).map((l) => /^(?:\d+|-)\t(?:\d+|-)\t(.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
+  // The file lines are the ones before the summary line (patch lines can look like them). A cut
+  // stdout ends mid-line: drop that line.
+  const head = stat ? lines.slice(0, statAt) : partial ? lines.slice(0, -1) : [];
+  const files = head.map((l) => /^(?:\d+|-)\t(?:\d+|-)\t(.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
   const counts = stat ? `+${stat[2] || 0} -${stat[3] || 0} lines, ${stat[1]} files` : partial ? `${files.length}+ files` : "+0 -0 lines, 0 files";
-  return { path: result.outputPath, files, partial, counts, record: `${result.outputPath.split("/").pop()} (${counts})` };
+  return { path: diffPath(round), files, partial, counts, record: `r${round}.diff (${counts})` };
 }
+// Paths a branch chose, in inline code, so a crafted name reads as data.
+const pathList = (paths) => paths.map(inlineCode).join(", ");
 
 // ---- 3. Review, 4. Revise (≤ maxRounds) -----------------------------------------------
 // Round ≥ 1 reviewers see what the previous round found and how it was answered, and judge the fix.
@@ -325,12 +350,13 @@ function reviewTask(lens, diff, files, round, prior, note) {
   const source = diff.path
     ? `The branch's changes are in ${diff.path}: the output of git diff --numstat --shortstat -p
 origin/main...HEAD (${diff.counts}): one line per changed file (lines added, lines deleted, path), a
-summary line, then the full diff. The file holds at most its first 1 MiB and ends in "..." when cut.
+summary line, then the full diff (and anything git printed on stderr). The file holds at most its
+first 1 MiB and ends in "..." when cut.
 You cannot run git, so this file is how you see the change: read all of it with your read tool,
 continuing with offset until the end (each read returns at most 2000 lines). You may skip the hunks
 of generated files (lockfiles, build output). The watchdog_diff tool does not see commits; do not use it.
-${diff.files.length || diff.partial ? `Changed files${diff.partial ? " (the first of them; the list at the top of the file has all)" : ""}: ${diff.files.join(", ")}.` : "The diff is empty: nothing on this branch differs from main."}`
-    : `The diff for this round could not be prepared (${diff.record}) and you cannot run git. Review ${files.length ? `the changed files: ${files.join(", ")}` : "the files the spec says change"}.`;
+${diff.files.length || diff.partial ? `Changed files${diff.partial ? " (the first of them; the list at the top of the file has all)" : ""}: ${pathList(diff.files)}.` : "The diff is empty: nothing on this branch differs from main."}`
+    : `The diff for this round could not be prepared (${diff.record}) and you cannot run git. Review ${files.length ? `the changed files: ${pathList(files)}` : "the files the spec says change"}.`;
   return `${CONTEXT}
 
 You are a READ-ONLY reviewer (round ${round}). Lens: ${LENS[lens]}${SEAM_NOTE}
@@ -380,7 +406,7 @@ function minors(results, lensList) {
 let files = implOut.changed_files || [];
 let checks = implOut.checks || {};
 let activeLenses = lenses.slice();
-let diff = diffFor(await diffRun(0));
+let diff = diffFor(await diffRun(0), 0);
 let results = await reviewBatch(activeLenses, diff, files, 0);
 let open = blocking(results, activeLenses);
 let followUps = minors(results, activeLenses);
@@ -439,7 +465,7 @@ say why in summary.`,
   checks = revOut.checks || checks;
   const prior = { findings: open, responses: revOut.responses || [] };
   activeLenses = Array.from(new Set(open.map((f) => f.lens)));
-  diff = diffFor(await diffRun(round));
+  diff = diffFor(await diffRun(round), round);
   results = await reviewBatch(activeLenses, diff, files, round, prior);
   open = blocking(results, activeLenses);
   followUps = followUps.concat(minors(results, activeLenses));
@@ -471,7 +497,9 @@ const integrateSchema = statusSchema({
 // What a "done" merge report carries: the conflicts when the merge stopped.
 const integrateFields = (out) => ["merge"].concat(out.merge === "conflict" ? ["conflicts"] : []);
 
-function integrateRun(key, recheck) {
+// `main`: the origin/main the host fetched. It is in the task so that a resume after main moved
+// merges again instead of reusing the old merge.
+function integrateRun(key, recheck, main) {
   return runs.run(key, {
     label: `${recheck ? "Re-check integration" : "Integrate main"} for issue #${issue}`,
     agent: "worker",
@@ -481,9 +509,9 @@ function integrateRun(key, recheck) {
     task: `${COMMON}
 
 You are the INTEGRATION stage${recheck ? ", re-checking after the fix round" : ""}. ${MERGE_EXCEPTION}
-Your only job is the merge. The workflow has fetched origin and runs the checks itself after you:
-do not fetch, do not run any check, do not edit, stage or commit anything else, and do not try to
-fix anything. Work in the foreground. Run from ${cwdQ}, exactly as written:
+Your only job is the merge. The workflow has fetched origin (origin/main is at ${main}) and runs
+the checks itself after you: do not fetch, do not run any check, do not edit, stage or commit
+anything else, and do not try to fix anything. Work in the foreground. Run from ${cwdQ}, exactly as written:
   ${mergeCmd}
 If the merge stops on conflicts, run
   git -C ${cwdQ} diff --name-only --diff-filter=U
@@ -506,13 +534,15 @@ function runChecks(prefix) {
   })), Promise.resolve({ checks: {}, failures: [], error: "" }));
 }
 
-// One integration attempt: fetch (host), merge (agent), main and head (host), and unless the merge
-// conflicted every check (host). { view, checks, failures }, or { error } when a step could not run.
+// One integration attempt: fetch and origin/main (host), merge (agent), main and head (host), and
+// unless the merge conflicted every check (host). { view, checks, failures }, or { error } when a step could not run.
 function integrationAttempt(recheck) {
   const pre = recheck ? "host-recheck" : "host";
   return hostStep(`${pre}-fetch`).then((fetched) => {
     if (!fetched.ok) return { error: hostBlocked || `git fetch origin: ${fetched.error.slice(0, 200)}` };
-    return integrateRun(recheck ? "integrate-recheck" : "integrate", recheck).then((result) => {
+    const fetchedMain = fetched.stdout.trim().split("\n").pop();
+    if (!/^[0-9a-f]{7,40}$/.test(fetchedMain)) return { error: `git rev-parse --short origin/main after the fetch: unexpected output` };
+    return integrateRun(recheck ? "integrate-recheck" : "integrate", recheck, fetchedMain).then((result) => {
       const out = result.structuredOutput || {};
       const gap = doneGaps("integrate", out, integrateSchema, integrateFields(out));
       if (!result.ok || out.status !== "done" || gap) return { error: gap || reason(result) };
@@ -625,7 +655,7 @@ into the branch and ${conflicted ? `conflicted in ${firstView.conflicts.join(", 
 ${changed.join(", ") || "files it did not list"}: ${integration.fix.summary}
 Judge whether the fix is right and keeps both this branch's and main's intent. The rest of the diff
 was reviewed in earlier rounds: raise findings there only where the fix or main's changes affect it.`;
-        diff = diffFor(await diffRun(r));
+        diff = diffFor(await diffRun(r), r);
         const fixReview = await reviewBatch(["code"], diff, files, r, null, note);
         const fixBlocking = blocking(fixReview, ["code"]);
         open = open.concat(fixBlocking);
@@ -699,7 +729,7 @@ const prOut = pr.structuredOutput || {};
 // No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
 if (!pr.ok || !prOut.pr_url) {
   const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
-  const integrationNote = integration.note ? `\nIntegration: ${integration.note}` : "";
+  const integrationNote = integration.note ? `\nIntegration: ${inlineCode(integration.note)}` : "";
   const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}${integrationNote}`);
   return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };
 }

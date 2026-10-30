@@ -31,7 +31,7 @@ export const readJson = (rel: string) => JSON.parse(readFileSync(new URL(`../${r
 type Handler = (event: unknown, ctx: unknown) => unknown;
 export interface ExecCall { cmd: string; args: string[]; cwd?: string }
 
-/** A stand-in for pi's ExtensionAPI: records handlers, commands, exec calls and emitted events. */
+/** A stand-in for pi's ExtensionAPI: records handlers, commands, exec calls, emitted events and session entries. */
 export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?: string; code?: number } = () => ({})) {
   const handlers: Record<string, Handler> = {};
   const commands: Record<string, { handler: (args: string, ctx: unknown) => Promise<void> }> = {};
@@ -41,7 +41,9 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
   const emitted: { channel: string; data: unknown }[] = [];
   const execCalls: ExecCall[] = [];
   const sent: { message: { customType: string; content: string; details?: unknown }; options?: { deliverAs?: string } }[] = [];
+  const entries: { customType: string; data: unknown }[] = [];
   const pi = {
+    appendEntry: (customType: string, data: unknown) => void entries.push({ customType, data }),
     sendMessage: (message: (typeof sent)[number]["message"], options?: { deliverAs?: string }) => void sent.push({ message, options }),
     on: (name: string, fn: Handler) => void (handlers[name] = fn),
     registerCommand: (name: string, def: { handler: (args: string, ctx: unknown) => Promise<void> }) => void (commands[name] = def),
@@ -64,5 +66,5 @@ export function fakePi(execImpl: (call: ExecCall) => { stdout?: string; stderr?:
       },
     },
   };
-  return { pi, handlers, commands, tools, emitted, execCalls, sent };
+  return { pi, handlers, commands, tools, emitted, execCalls, sent, entries };
 }
