@@ -139,7 +139,7 @@ stay with an agent. What the grant is and why it is safe:
   - `host-worktree`: `git rev-parse --show-toplevel --abbrev-ref HEAD`
   - `host-review-ignore`: `echo '*'`, saved as `.pi/crucible-review/.gitignore`
   - `host-fetch` and `host-recheck-fetch`: `git fetch origin && git rev-parse --short origin/main`
-  - `host-heads` and `host-recheck-heads`: `git rev-parse --short origin/main HEAD`
+  - `host-heads` and `host-recheck-heads`: `git rev-parse origin/main HEAD` (full shas; the script keeps the first 7 characters)
   - `host-diff-r0` to `host-diff-r6`:
     `git diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`,
     saved as `.pi/crucible-review/r<round>.diff`

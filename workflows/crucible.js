@@ -548,8 +548,8 @@ function integrationAttempt(recheck) {
       const gap = doneGaps("integrate", out, integrateSchema, integrateFields(out));
       if (!result.ok || out.status !== "done" || gap) return { error: gap || reason(result) };
       return hostStep(`${pre}-heads`).then((heads) => {
-        const [main, head] = heads.ok ? heads.stdout.trim().split("\n") : [];
-        if (!main || !head) return { error: `git rev-parse --short origin/main HEAD: ${heads.ok ? "unexpected output" : heads.error.slice(0, 200)}` };
+        const [main, head] = heads.ok ? heads.stdout.trim().split("\n").map((sha) => (/^[0-9a-f]{40}$/.test(sha) ? sha.slice(0, 7) : "")) : [];
+        if (!main || !head) return { error: `git rev-parse origin/main HEAD: ${heads.ok ? "unexpected output" : heads.error.slice(0, 200)}` };
         const view = { main, head, merge: out.merge, conflicts: out.merge === "conflict" ? out.conflicts : [] };
         if (out.merge === "conflict") return { view, checks: {}, failures: [] };
         return runChecks(recheck ? "recheck" : "check").then((ran) => (ran.error ? { error: ran.error } : { view, checks: ran.checks, failures: ran.failures }));

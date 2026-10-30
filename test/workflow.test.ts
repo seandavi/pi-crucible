@@ -25,7 +25,7 @@ const diffAt = (round: number, worktree = "/tmp/repo-worktrees/issue-2") => `${w
 const defaultHost = (key: string, where: { worktree: string; branch: string }): HostAnswer => {
   if (key === "host-worktree") return { stdout: `${where.worktree}\n${where.branch}\n` };
   if (key.endsWith("-fetch")) return { stdout: "c57139f\n" };
-  if (key.endsWith("-heads")) return { stdout: "c57139f\nabc1234\n" };
+  if (key.endsWith("-heads")) return { stdout: "c57139f000000000000000000000000000000000\nabc1234000000000000000000000000000000000\n" };
   if (key.startsWith("host-diff-")) return { stdout: NUMSTAT };
   return { stdout: "" };
 };
@@ -253,7 +253,7 @@ test("a PR stage that opens no PR, or fails, flags a human and stops", async () 
 const GIT = "git -c core.hooksPath=/dev/null";
 const DIFF = `${GIT} diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`;
 const FETCH = `${GIT} fetch origin && ${GIT} rev-parse --short origin/main`;
-const HEADS = `${GIT} rev-parse --short origin/main HEAD`;
+const HEADS = `${GIT} rev-parse origin/main HEAD`;
 const WORKTREE = `${GIT} rev-parse --show-toplevel --abbrev-ref HEAD`;
 const blockerOnCode = (key: string): Answer =>
   key === "review-code-r0"
@@ -302,7 +302,7 @@ test("a replay (auto-resume) runs the same host commands again, and the reviewer
 
 test("a replay after main moved merges again, and the record names the main it merged", async () => {
   const once = await simulate(args, happy());
-  const moved = await simulate(args, happy(), { host: hostWith({ "host-fetch": { stdout: "d00d00d\n" }, "host-heads": { stdout: "d00d00d\nbeef123\n" } }) });
+  const moved = await simulate(args, happy(), { host: hostWith({ "host-fetch": { stdout: "d00d00d\n" }, "host-heads": { stdout: "d00d00d000000000000000000000000000000000\nbeef123000000000000000000000000000000000\n" } }) });
   assert.match(once.task("integrate"), /origin\/main is at c57139f/);
   assert.match(moved.task("integrate"), /origin\/main is at d00d00d/);
   assert.notEqual(moved.task("integrate"), once.task("integrate"), "a changed task is not reused");
@@ -607,7 +607,7 @@ test("a fetch or rev-parse that fails is an integration error; a failed fetch sk
   assert.equal(fetch.result.integration.note, "git fetch origin && git rev-parse --short origin/main: Command exited with code 128. fatal: unable to access");
   const heads = await simulate(args, happy(), { host: hostWith({ "host-heads": { stdout: "" } }) });
   assert.equal(heads.result.integration.status, "error");
-  assert.equal(heads.result.integration.note, "git rev-parse --short origin/main HEAD: unexpected output");
+  assert.equal(heads.result.integration.note, "git rev-parse origin/main HEAD: unexpected output");
   assert.ok(!heads.hostCalls.some((h) => h.key === "check-test"));
 });
 
@@ -768,7 +768,7 @@ test("a done merge report without its fields is a stage error, and no check runs
 });
 
 test("a recheck that changes the result updates the record", async () => {
-  const { result, task } = await simulate(args, happy({ "integrate-recheck": merged({ merge: "up-to-date" }) }), { host: hostWith({ "check-test": { exit: 1, stdout: "boom" }, "host-recheck-heads": { stdout: "d00d00d\nfeedbee\n" } }) });
+  const { result, task } = await simulate(args, happy({ "integrate-recheck": merged({ merge: "up-to-date" }) }), { host: hostWith({ "check-test": { exit: 1, stdout: "boom" }, "host-recheck-heads": { stdout: "d00d00d000000000000000000000000000000000\nfeedbee000000000000000000000000000000000\n" } }) });
   assert.equal(result.integration.status, "pass");
   assert.equal(result.integration.main, "d00d00d");
   assert.equal(result.integration.head, "feedbee");
