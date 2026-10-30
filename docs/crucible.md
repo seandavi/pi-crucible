@@ -132,7 +132,8 @@ pi install git:github.com/seandavi/pi-crucible
 The package's extension (`extensions/crucible.ts`) registers the workflow as the named
 pi-subagents resource **`pi-crucible`** in every session. To work on the engine itself, load the
 checkout instead: `pi -e ~/Documents/git/pi-crucible/extensions/crucible.ts` (after `npm install`
-there); the script is re-read on each session start, so `/reload` picks up edits.
+there); the script is re-read on each session start, so `/reload` picks up edits. Not while a run
+is active: the run auto-resumes after `/reload` only if the resource still resolves to the same script.
 
 **Named resource, not a path** (verified 2026-10-23 against pi-subagents 0.80.0). pi-subagents
 exports `registerWorkflowResource` from `pi-subagents/workflow-resources` for trusted extensions.

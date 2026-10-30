@@ -148,11 +148,13 @@ merge.
   heavy lifting: the sandbox that runs the workflow script, child agents (`worker`, `reviewer`) with
   structured outputs, parallel and async runs, and the event-bus API `/crucible` launches through.
   pi-crucible registers its workflow as a named pi-subagents resource. Install it as a pi package;
-  pi-crucible also depends on it for the registration API. Tested with 0.80 and 0.81. Two details
+  pi-crucible also depends on it for the registration API. Needs 0.82 or later (a run interrupted by
+  `/reload` or a Pi exit resumes itself); tested with 0.82 and 0.83. Two details
   pi-crucible relies on are worth knowing if you build on it: the resource registry is shared
   through `globalThis`, and a named resource receives its `args` only when resolved (pi-crucible
   inlines them into the script). See [docs/crucible.md](docs/crucible.md#installing).
-- **[pi](https://pi.dev)** hosts it (tested with pi 1.1 and 1.4).
+- **[pi](https://pi.dev)** hosts it: pi 1.2 or later, which pi-subagents 0.80 and later need (tested
+  with pi 1.4).
 - **Models:** by default `claude-bridge/claude-opus-5-5`, `-sonnet-5-5` and `-haiku-5-5` through
   [pi-claude-bridge](https://www.npmjs.com/package/pi-claude-bridge). Set `models` in the config to
   use any model pi can reach.
