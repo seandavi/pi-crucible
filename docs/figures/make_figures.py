@@ -113,13 +113,13 @@ def crucible_flow(theme: dict[str, str]) -> str:
           "BLUE")
 
     f.group(930, 80, 280, 286, "review · parallel", "VIOLET")
-    f.tag_box(950, 100, 240, 46, "diff · Haiku", "r<n>.diff", "CORAL")
+    f.tag_box(950, 100, 240, 46, "diff · host", "git diff", "MUTED")
     for i, (lens, when) in enumerate([("code", "always"), ("ux", "review:ux"),
                                       ("<lens>", "review:<lens>")]):
         f.tag_box(950, 160 + i * 66, 240, 54, lens, when)
 
-    f.box(1280, top, 240, h, "Integrate · Haiku", ["fetch, merge", "  origin/main", "run every check",
-                                                   "never stops the run"], "CORAL")
+    f.box(1280, top, 240, h, "Integrate · Haiku", ["host: fetch", "Haiku: merge", "  origin/main",
+                                                   "host: every check"], "CORAL")
     f.box(1580, top, 240, h, "PR · Sonnet", ["push the branch", "follow-up issue for", "  minor/nit findings",
                                              "label needs:human"], "BLUE")
     for i, note in enumerate(["draft if blocker/major", "findings remain,", "checks fail or", "main does not merge"]):
@@ -157,8 +157,8 @@ def crucible_flow(theme: dict[str, str]) -> str:
     f.add(f.text(30, ly + 6, "LEGEND", 14, theme["MUTED"], 700, mono=True))
     x = 130
     for role, label in [("VIOLET", "Opus: judgment"), ("BLUE", "Sonnet: volume"),
-                        ("CORAL", "Haiku: diff, merge and checks, flag a human"), ("AMBER", "a person"),
-                        ("MUTED", "the caller")]:
+                        ("CORAL", "Haiku: merge, flag a human"), ("AMBER", "a person"),
+                        ("MUTED", "no model: the caller, host commands")]:
         f.add(f'<rect x="{x}" y="{ly - 10}" width="22" height="22" rx="5" fill="{theme[role]}1f" '
               f'stroke="{theme[role]}" stroke-width="2"/>\n')
         f.add(f.text(x + 32, ly + 7, label, 16))
@@ -174,9 +174,9 @@ def crucible_flow(theme: dict[str, str]) -> str:
     f.add(f.text(x + w + 10, ly + 7, "resume point", 16))
 
     return f.svg(2120, 720, "The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff "
-                            "(Haiku) before each round of parallel review lenses (Opus), up to two "
-                            "revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix "
-                            "round), then a PR (Sonnet) that a human merges. Spec or implement can "
+                            "(host command) before each round of parallel review lenses (Opus), up to two "
+                            "revise rounds (Sonnet), integration with main (Haiku merges, host commands "
+                            "fetch and run the checks, one Sonnet fix round), then a PR (Sonnet) that a human merges. Spec or implement can "
                             "stop and flag a human.")
 
 

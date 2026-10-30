@@ -56,7 +56,8 @@ Labels the engine and its runs use:
    reuses its finished stages. Not after editing `workflows/crucible.js`, though: a named resource
    must resolve to the same script, so the auto-resume is refused (pi-subagents docs/workflows.md,
    "Failed lane recovery"). Don't edit the script while a run is active, or relaunch by hand with
-   `options.reuseFrom`.
+   `options.reuseFrom` and the issue's worktree as `cwd`. The resume also needs the check grant
+   recorded in the session that launched the run; elsewhere, relaunch with `/crucible <n> --start-at …`.
 5. Keep things in step:
    - Args added or changed in `crucible.js` → update `src/resource.ts` in the same commit.
    - Config fields added or changed → update `src/config.ts`, run `npm run schema`, and update

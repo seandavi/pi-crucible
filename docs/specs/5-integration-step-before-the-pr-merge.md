@@ -4,6 +4,20 @@ Issue: [seandavi/pi-factory#5](https://github.com/seandavi/pi-factory/issues/5),
 tracking issue #1 (package → launcher → reviewers get the diff → **integration step** →
 migrations). Labelled `seam`: every consuming repository's runs go through this stage.
 
+> **Changed by #57.** The fetch and the checks are now host commands (`runs.host`), and so is
+> recording main and the branch head (`git rev-parse --short origin/main HEAD`, which adds `head`
+> to the Integration record). The fetch step also prints `origin/main`'s commit, which the merge
+> task names, so a resume after main moved merges again. The Haiku worker only merges
+> `origin/main` (or reports the conflicts), and its report is `{status, summary, merge, conflicts}`.
+> The checks are granted only when `/crucible` read the config from `origin/main` in the session
+> (a hand launch or a working-tree config gets none, and integration is an error). A check passes on exit 0. It
+> fails on a nonzero exit or on running past 20 minutes. A check that cannot run is an
+> integration error. The fix round gets each failing check's exit code and the first 200
+> characters of its output (all pi-subagents gives the script), and is told to run the failing
+> checks itself, instead of an 80-line tail. The re-check is fetch (host), merge (agent),
+> rev-parse and checks (host). The integrate prompt and schema below are history. See
+> [docs/crucible.md](../crucible.md#host-commands).
+
 ## Goal
 
 In bioc-mcp, three semantic merge breaks between parallel PRs got through. Twice a function

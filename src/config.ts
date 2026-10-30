@@ -39,11 +39,17 @@ export const EngineConfig = Type.Object(
       Type.Object(
         {
           name: Name,
-          command: Text("Shell command, run from the worktree root.", 500),
+          // Not blank and no NUL: pi-subagents refuses such a host grant.
+          command: Type.String({
+            minLength: 1,
+            maxLength: 500,
+            pattern: "^[^\\x00]*\\S[^\\x00]*$",
+            description: "Shell command, run with sh from the worktree root. Integration runs it on the host exactly as written, granted only when /crucible read the config from origin/main.",
+          }),
         },
         { additionalProperties: false },
       ),
-      { maxItems: 8, description: "Commands every writing stage runs and reports, by name; integration runs all of them after merging main. Empty: the run reports \"no checks configured\"." },
+      { maxItems: 8, description: "Commands every writing stage runs and reports, by name; after merging main, integration runs all of them as host commands. Empty: the run reports \"no checks configured\"." },
     ),
     lenses: Type.Record(Name, Text("What this reviewer checks.", 3000), {
       additionalProperties: false,
@@ -74,7 +80,7 @@ export const EngineConfig = Type.Object(
         {
           strong: Type.Optional(Type.String({ minLength: 1, description: "Spec and review (default claude-bridge/claude-opus-5-5)." })),
           fast: Type.Optional(Type.String({ minLength: 1, description: "Implement, revise, the integration fix, PR (default claude-bridge/claude-sonnet-5-5)." })),
-          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human, writing the review diff, and the integration merge and checks (default claude-bridge/claude-haiku-5-5)." })),
+          small: Type.Optional(Type.String({ minLength: 1, description: "Flagging a human and the integration merge (default claude-bridge/claude-haiku-5-5)." })),
         },
         { additionalProperties: false },
       ),

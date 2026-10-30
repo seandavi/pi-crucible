@@ -16,10 +16,10 @@ matters and the fast model where volume does. The script is
 |---|---|---|---|---|
 | Spec | Opus | `worker` | `<specDir>/<issue>-<slug>.md` (default `docs/specs`), one commit | `{status, spec_path, blocking_questions}` |
 | Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}`: one result per configured check |
-| Diff | Haiku | `worker`, before each review round | `.pi/crucible-review/r<round>.diff` in the worktree, ignored by git | `{status, summary, changed_files, diff_lines}` |
+| Diff | none | a host command, before each review round | `.pi/crucible-review/r<round>.diff` in the worktree, ignored by git | git's per-file counts, summary line and patch |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
 | Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, summary, responses[], changed_files, checks}` |
-| Integrate | Haiku; Sonnet for the fix | `worker`, once after review | a merge of `origin/main` into the branch; on a conflict or failing check, one fix round and a re-check | `{status, summary, main, merge, conflicts, checks, failures}`; fix: `{status, summary, changed_files, non_test_files, checks}` |
+| Integrate | Haiku merges; host commands fetch and check; Sonnet for the fix | `worker`, once after review | a merge of `origin/main` into the branch; on a conflict or failing check, one fix round and a re-check | merge: `{status, summary, merge, conflicts}`; fix: `{status, summary, changed_files, non_test_files, checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
@@ -28,10 +28,9 @@ stage calls `structured_output` once, at the end, and again only after a rejecte
 pi-subagents keeps the last valid call, so this stops a stray second report (in factory-control
 #140, `{status: "done", pr_url: ""}` from the integrate stage) from replacing the real one. A stage
 with a done/blocked status requires only `status` and `summary`; the script checks the fields a
-`done` report must carry (a stage's changed files, every configured check, the diff's line count,
-integration's `main` and `merge`, and `failures` when a check failed)
-and treats a `done` without them as the stage failing, with a message such as
-`integrate reported "done" without: checks.test`. A missing check is never read as a failing one.
+`done` report must carry (a stage's changed files, every configured check, the merge's result and
+its conflicts) and treats a `done` without them as the stage failing, with a message such as
+`implement reported "done" without: checks.test`. A missing check is never read as a failing one.
 The schemas use no `if`/`then`: not every model provider a config can name enforces conditional
 keywords (#56).
 
@@ -53,14 +52,23 @@ even when nothing calls it yet. Added after #2, where four such findings came ba
 **Finding ids** are `<lens>-r<round>-<n>`, unique across rounds.
 
 **The diff:** reviewers have no shell, so before each review round (round 0 and every
-re-review) a Haiku worker writes `git diff origin/main...HEAD`, its `--stat` summary first, to
-`.pi/crucible-review/r<round>.diff` in the worktree. A `.gitignore` containing `*` in that
-directory keeps it out of git without touching the repository's own ignore files. Every reviewer
-gets the file's path and git's list of changed files, reads the whole diff with its read tool, and
-gives finding locations as `path:line` from the diff's hunks. If the diff step fails (a wrong
-branch, a git error), the round is reviewed from the changed-file list instead, and pi-crucible
-record says the diff was unavailable; the run does not stop. Added after bioc-mcp, where
-reviewers without git reviewed from the file list alone (#4).
+re-review) a host command runs
+`git -c core.hooksPath=/dev/null diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`.
+pi-subagents saves its stdout and stderr (the first 1 MiB) to `.pi/crucible-review/r<round>.diff`
+in the worktree. Before the first diff another host step writes `.pi/crucible-review/.gitignore`
+(`*`), so no stage commits the directory. The path is the same in every run, so after an
+auto-resume the reviewers' tasks are unchanged and their finished reviews are reused. Every reviewer
+gets that file's path, git's list of changed files (each in inline code) and the changed-line
+counts, reads the whole diff with its read tool, and gives finding locations as `path:line` from
+the diff's hunks. The list and counts come from the first 4 KiB of the command's stdout, which is
+all a workflow script sees; only the lines before git's summary line are read as files. When a
+diff has so many files that the summary line falls outside those 4 KiB, the list is marked partial
+and the counts are unknown. The record names the file and git's insertions and deletions, e.g.
+`r0.diff (+346 -125 lines, 10 files)`. These count changed lines, not lines in the file. If the
+diff step fails (a git error, a workflow outside the worktree, a launch by path), the round is
+reviewed from the changed-file list instead, and the crucible record says `unavailable: <why>`; the
+run does not stop. Added after bioc-mcp, where reviewers without git reviewed from the file list
+alone (#4). It was a Haiku stage until #57.
 
 **Revise rounds:** at most two. Only `blocker` and `major` findings trigger a round, and only the
 lenses that asked for changes review again. Revise fixes root causes and updates the spec when a
@@ -74,25 +82,33 @@ findings remain after round two, the PR opens as a **draft** listing them.
 
 **Integration:** each run's checks pass against the main it started from, and parallel runs can
 still break each other once merged (in bioc-mcp: a changed function signature, twice, and a test
-fixture's record ids). So after review a Haiku worker fetches `origin`, merges `origin/main` into
-the branch (a merge commit, never a rebase) and runs every configured check in full. On a
-conflict or a failing check, one Sonnet fix round gets the conflicting paths or the checks'
-output, fixes the branch without reverting main's changes, and a Haiku re-check merges and runs
-the checks again. If the fix touched files other than tests, fixtures and test data, the `code`
+fixture's record ids). So after review the host fetches `origin` and prints `origin/main`'s
+commit. A Haiku worker merges `origin/main` into the branch (a merge commit, never a rebase) and
+only that: it fetches nothing and runs no check. Its task names that commit, so when main has
+moved between a run and its auto-resume the merge runs again instead of being reused. The host then records `main` and the branch `head` (`git rev-parse --short
+origin/main HEAD`) and, unless the merge conflicted, runs every configured check to the end, one
+after another. A check passes when it exits 0. It fails when it exits nonzero, is killed or runs
+past its 20-minute limit. A check that cannot run at all (a refused grant) is an integration error. On a
+conflict or a failing check, one Sonnet fix round gets the conflicting paths, or each failing
+check's exit code (`"timeout"`) and the first 200 characters of its output. pi-subagents gives the
+script no more than that, so the fix round is told to run the failing checks itself. It fixes the
+branch without reverting main's changes. A re-check then fetches, merges and runs the checks again
+the same way. If the fix touched files other than tests, fixtures and test data, the `code`
 lens re-reviews in one more round, with its own diff; its blocker/major findings are added to the
 still-open ones (it judges the fix, so it never clears an earlier finding) rather than starting
 another revise round. The checks the PR reports are the post-merge ones, and
 its crucible record gets an Integration line describing the final state: after a fix round, the
-re-check's merge, checks and failures, plus `firstAttempt` (what the first merge hit) when that
-differs. If the re-check fails, `main` and `merge` are null, `checks` and `failing` are the
-fix's, and `firstAttempt` holds the first view. An integrate report that says `done` without every check
-result is an integration error, not a failing check, and gets no fix round. A branch that still conflicts or fails, or whose
+re-check's `main`, `head`, merge and checks, plus `firstAttempt` (what the first merge hit) when that
+differs. If the re-check fails, `main`, `head` and `merge` are null, `checks` and `failing` are the
+fix's, and `firstAttempt` holds the first view. A merge report that says `done` without its result
+(or, on a conflict, the conflicting paths) is an integration error, not a failing check, and gets
+no fix round, and no check runs. So is a fetch or rev-parse that fails. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
 implementation reporting `blocked` stops before review; a PR stage that fails or opens no PR stops
 the run at the end. Integration never stops the run; see above. All three label the issue `needs:human` (creating the label first if the repository lacks it) and
-comment why; the run's result says whether the flag succeeded (`flagged`). Every PR pi-crucible opens is labelled `needs:human` too; remove the label when you
+comment why (posted verbatim from a quoted heredoc, with the integration note in inline code); the run's result says whether the flag succeeded (`flagged`). Every PR pi-crucible opens is labelled `needs:human` too; remove the label when you
 have acted. Your queue is `gh issue list -l needs:human` plus `gh pr list -l needs:human`.
 
 **Resuming:** `--start-at implement` skips the spec stage (the spec must already be on the branch);
@@ -103,9 +119,85 @@ record stays in the PR.
 **Provenance:** `/crucible` passes the engine's commit (and whether its checkout had local changes),
 and the PR's crucible record ends with `Engine: seandavi/pi-crucible@<sha>`. The config is read from
 `origin/main`, so the run's config is the one at that commit (`--dry-run` shows it), unless
-`/crucible` warned that it fell back to the working tree.
+`/crucible` warned that it fell back to the working tree; then its checks are not granted (see
+[Host commands](#host-commands)).
 
 **Never automated:** merging the PR. A human merges, from the main session. (The integration stage merges main into the branch, never the branch into main.)
+
+## Host commands
+
+The diff, fetch, rev-parse and checks steps are host commands (pi-subagents `runs.host`, #57). Until
+then they were prose instructions to Haiku, which broke the required order four times in one day of
+factory-control runs (docs/research/workflow-usage-review.md). The merge and conflict resolution
+stay with an agent. What the grant is and why it is safe:
+
+- **A fixed table.** `resolve` in [`src/resource.ts`](../src/resource.ts) (`hostTable`) grants
+  exactly these key → command pairs and prepends the same table to the script as
+  `CRUCIBLE_HOST`. pi-subagents admits a `runs.host` call only on an exact match of key and
+  command. `git` below is `git -c core.hooksPath=/dev/null`, so no repository hook runs. The keys
+  are:
+  - `host-worktree`: `git rev-parse --show-toplevel --abbrev-ref HEAD`
+  - `host-review-ignore`: `echo '*'`, saved as `.pi/crucible-review/.gitignore`
+  - `host-fetch` and `host-recheck-fetch`: `git fetch origin && git rev-parse --short origin/main`
+  - `host-heads` and `host-recheck-heads`: `git rev-parse --short origin/main HEAD`
+  - `host-diff-r0` to `host-diff-r6`:
+    `git diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`,
+    saved as `.pi/crucible-review/r<round>.diff`
+  - `check-<name>` and `recheck-<name>`: each configured check's `command`, when granted (below)
+
+  The git commands are constants. Nothing from the issue, the PR, a model's report or the args
+  (the worktree path included) is put into any command. pi-subagents writes a step's saved output
+  only inside the workflow cwd and never through a link; the other steps' output goes to the run's
+  artifacts.
+- **Checks are granted only from origin/main.** The args are whoever calls the resource, so they
+  cannot be what authorises a command. When `/crucible` (or `crucible_launch`) launches from a
+  config it read from `origin/main`, the extension records that config's checks for the worktree,
+  in memory and as a `pi-crucible-check-grant` entry in the pi session. `resolve` grants
+  `check-*` and `recheck-*` only when `args.config.checks` is one of the lists recorded for
+  `args.worktree`. Otherwise (a hand launch through `subagent`, args with a changed or extra
+  check, a config `/crucible` read from the main checkout's working tree because `origin/main`
+  has none yet) it grants the git commands alone. The checks then cannot run, so integration is an
+  error that says so, and the PR opens as a draft. Merge the config to `main` and relaunch with
+  `/crucible`.
+- **Checks are the config's strings as written.** pi-subagents has no argv mode: it runs every
+  host command with `sh -c` (`shell: true`). So a check may use `&&`, pipes and `cd`, as before.
+  That is safe because of where the granted strings come from: the repo's owner wrote them on
+  `origin/main`, never in the issue's worktree, where the branch could edit them, and the implement
+  and revise stages already ran them in their shell. A shell metacharacter in a string the owner
+  wrote grants nothing the owner did not have. (A stricter rule, plain words only with no shell
+  syntax, would have broken 7 of the 13 configs in use in 2026-10.)
+- **The worktree guard is step one.** pi-subagents has no per-step cwd: host commands run in the
+  workflow's cwd, so `/crucible` launches the workflow from the worktree, using the path git
+  prints for it (`git rev-parse --show-toplevel`, so a symlinked `worktreeRoot` works). The
+  script's first host step must print exactly `<worktree>` and `<branch>`. Otherwise no other host
+  command runs, the diffs are `unavailable` and integration is an error naming the mismatch.
+- **Safe to repeat.** On an auto-resume pi-subagents reuses each finished agent stage whose task
+  is unchanged, and runs every `runs.host` call again. Each key runs at most once per run, and
+  every step can be repeated: the guard, rev-parse and diff only read (the diff and `.gitignore`
+  files are rewritten in place), fetch updates `origin`'s refs in the repository's shared `.git`
+  (as `/crucible` itself does), and the checks run again against the same tree. The resumed run
+  resolves the resource again; the check grants are rebuilt from the session's entries on
+  `session_start`, so after a `/reload` it resolves to the same script. A resume from a session
+  without the entry (or one never saved: pi writes a session file only once it has a conversation)
+  resolves without the checks, so pi-subagents refuses it as changed; relaunch with
+  `/crucible <n> --start-at implement` or `--start-at review`. A relaunch by hand with
+  `options.reuseFrom` must use the worktree as its `cwd`.
+- **What it does not do.** The checks are not tamper-proof: `just test` or `npm test` runs the
+  worktree's justfile or `package.json` scripts, which the implementing agent can edit. Nor are
+  the git commands: hooks are off, and `--no-ext-diff` and `--no-textconv` keep diff drivers out,
+  but the rest of the repository's config still applies, e.g. `remote.origin.url` and
+  `core.sshCommand` for the fetch, and any stage with a shell can edit `.git/config`. That was just
+  as true when an agent ran them (same user, no sandbox), so it is no regression. Sandboxing is
+  factory-control #35/#122's job. Likewise a process running as the user can write the session
+  file the check grants are rebuilt from.
+- **Limits.** pi-subagents allows 32 grants per resource and 32 `runs.host` calls per run. At the
+  most a run can ask for (`maxRounds` 5, 8 checks, a fix round and its re-review) the table has 29
+  entries and the run makes 29 calls, and the tests keep both at 32 or fewer. Each step's stdout
+  reaches the script as its first 4 KiB, and a failure as at most 200 characters of message.
+- **Launched by path** (not as the `pi-crucible` resource), a script has no host authority. The
+  diffs are `unavailable` and integration is an error, both saying "launched without the
+  pi-crucible resource; host steps unavailable". That note is also in the comment when the PR
+  stage stops.
 
 ## Configuring a repository
 
@@ -120,7 +212,7 @@ and `.pi/crucible.json`. Merge the config to `main`: `/crucible` reads it from `
 | `design` | every stage | Where the design lives and how to treat it. |
 | `spec.design` | spec | What the spec's Design section must pin down for this project. |
 | `implement` | implement, integration fix | Project rules: fixtures, data tests must never read, setup steps. |
-| `checks` | implement, revise, integration, PR | `[{name, command}]`, run from the worktree root and reported by name. A `fail` makes the PR a draft. Integration runs all of them after merging main. |
+| `checks` | implement, revise, integration, PR | `[{name, command}]`, run with `sh` from the worktree root and reported by name. A `fail` makes the PR a draft. After merging main, integration runs all of them as host commands, exactly as written and with a 20-minute limit each (see [Host commands](#host-commands)). |
 | `lenses` | review | `{name: text}`; `code` is required. |
 | `defaultLenses` | `/crucible` | Lenses every run gets; must include `code` (default `["code"]`). |
 | `seamNote` | review | What later issues build on, for the `seam` reviewer note. |
@@ -159,7 +251,8 @@ gives each package its own module root. What that means in practice:
 
 - Registration is per session: `session_start` registers, `session_shutdown` disposes.
 - `resolve` must be synchronous with no I/O. The extension reads `workflows/crucible.js` on
-  `session_start` and `resolve` validates the args (`src/resource.ts`) and returns that text.
+  `session_start`, and rebuilds the check grants from the session's entries there; `resolve`
+  validates the args (`src/resource.ts`) and returns that text.
   Bad args fail before any child starts, with every problem listed.
 - pi-subagents hands a named resource's `args` only to `resolve`; the sandbox starts with empty
   `args` (`subagent-executor.js`: `const { workflow, args, ...rest } = publicParams`). So `resolve`
@@ -244,15 +337,19 @@ approve, push to the branch, or comment on or close the issue or PR (#35). Which
 the caller's decision; the tools don't check triage state.
 
 Launching by hand still works, for scripts and agents outside pi: pass the same args `/crucible --dry-run`
-prints. The validator holds hand launches to the names `/crucible` derives: `branch` must be
+prints. A hand launch gets no check grants (see [Host commands](#host-commands)), so its
+integration is an error and its PR a draft. The validator holds hand launches to the names `/crucible` derives: `branch` must be
 `issue-<issue>-<slug>`, and `worktree` a normalized absolute path ending in `/issue-<issue>` with no control characters or shell
 metacharacters. The validator cannot read the disk, so every stage that writes (spec, implement,
-diff, revise, integrate, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
+revise, integrate, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HEAD`; unless it prints the issue
 branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
-read-only and have no shell, so they skip the check and read the diff the diff stage wrote.
+read-only and have no shell, so they skip the check and read the diff the host wrote. Launch with
+the worktree as `cwd`: the host commands run there, and the workflow's first host step checks it.
+Use the real path (what `git -C <worktree> rev-parse --show-toplevel` prints) for both `worktree` and
+`cwd`, or the check fails when any part of the path is a symlink.
 
 ```js
-subagent({ workflow: "pi-crucible", async: true, cwd: "<repo>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })
+subagent({ workflow: "pi-crucible", async: true, cwd: "<worktree>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })
 ```
 
 ## What to watch while it is an experiment
