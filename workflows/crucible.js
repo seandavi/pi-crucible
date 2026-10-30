@@ -82,11 +82,14 @@ and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
 // implement, diff, revise, integrate, integrate-fix, PR; all on the worker agent, which has bash) checks that the directory really
 // is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
 // they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
+const REPORT_ONCE = `Call structured_output exactly once, as your last step, with the whole report: a later call
+replaces an earlier one, and a report with fields its schema does not name is rejected.`;
 const COMMON = `${CONTEXT}
 BEFORE ANYTHING ELSE run: git -C ${cwdQ} rev-parse --abbrev-ref HEAD
 If the output is not exactly ${branch}, change nothing and stop: a stage with a status reports
 "blocked" and names the mismatch in summary or blocking_questions; the PR stage reports pr_url as
-an empty string.`;
+an empty string and followup_issue null.
+${REPORT_ONCE}`;
 
 // Skills handed to stages (config.skills). The built-in worker/reviewer agents set
 // inheritSkills: false, so a child sees a skill only when named here. A missing skill is a warning.
@@ -94,19 +97,48 @@ const BUILD_SKILLS = (config.skills && config.skills.build) || undefined;
 const LENS_SKILLS = (config.skills && config.skills.lenses) || {};
 const withSkill = (skill) => (skill ? { skill } : {});
 
+// Every report is closed (additionalProperties: false), so a stray or half-copied second report is
+// rejected instead of replacing the real one (#56). `required` holds only what a "blocked" report
+// has too; doneGaps checks the rest of a "done" report. No if/then in the schemas: not every model
+// provider a config can name honours conditional keywords, and an unenforced rule is worse than none.
 const statusSchema = (extra) => ({
   type: "object",
-  required: ["status"],
-  properties: Object.assign({ status: { type: "string", enum: ["done", "blocked"] } }, extra),
+  additionalProperties: false,
+  required: ["status", "summary"],
+  properties: Object.assign({ status: { type: "string", enum: ["done", "blocked"] }, summary: { type: "string" } }, extra),
 });
+// The fields of a report that are missing or do not match the schema (type, enum and, for an
+// object, each required key in turn), as dotted paths.
+function fieldGaps(value, schema, path) {
+  if (value === undefined || value === null) return [path];
+  const typed = schema.type === "array" ? Array.isArray(value)
+    : schema.type === "integer" ? Number.isInteger(value)
+    : schema.type === "object" ? typeof value === "object" && !Array.isArray(value)
+    : typeof value === schema.type;
+  if (!typed || (schema.enum && schema.enum.indexOf(value) < 0)) return [path];
+  if (schema.type !== "object") return [];
+  return (schema.required || []).reduce((gaps, k) => gaps.concat(fieldGaps(value[k], schema.properties[k], `${path}.${k}`)), []);
+}
+// Why a "done" report cannot be used ("" when it can, or when it is not "done"): a field the script
+// reads is missing, so it must not be read as a result (a missing check is not a failing one).
+function doneGaps(stage, out, schema, fields) {
+  if (out.status !== "done") return "";
+  const gaps = fields.reduce((all, f) => all.concat(fieldGaps(out[f], schema.properties[f], f)), []);
+  return gaps.length ? `${stage} reported "done" without: ${gaps.join(", ")}` : "";
+}
+const reason = (result) => String((result.structuredOutput || {}).summary || result.error || "no structured output").slice(0, 200);
+// A "done" report carries the checks only when some are configured.
+const checksField = CHECKS.length ? ["checks"] : [];
 // One result per configured check, by name: "n/a" when the change cannot affect it.
 const checksSchema = {
   type: "object",
+  additionalProperties: false,
   required: CHECKS.map((c) => c.name),
   properties: Object.fromEntries(CHECKS.map((c) => [c.name, { type: "string", enum: ["pass", "fail", "n/a"] }])),
 };
 const reviewSchema = {
   type: "object",
+  additionalProperties: false,
   required: ["verdict", "findings"],
   properties: {
     verdict: { type: "string", enum: ["approve", "changes"] },
@@ -114,6 +146,7 @@ const reviewSchema = {
       type: "array",
       items: {
         type: "object",
+        additionalProperties: false,
         required: ["id", "severity", "location", "problem", "fix"],
         properties: {
           id: { type: "string" },
@@ -158,6 +191,7 @@ if (stageRuns("spec")) {
     cwd,
     outputSchema: {
       type: "object",
+      additionalProperties: false,
       required: ["status", "spec_path", "blocking_questions"],
       properties: {
         status: { type: "string", enum: ["ready", "blocked"] },
@@ -188,6 +222,10 @@ if (stageRuns("spec")) {
 
 // ---- 2. Implement --------------------------------------------------------------------
 let implOut = { status: "done", changed_files: [], checks: {}, skipped: true };
+const implementSchema = statusSchema({
+  changed_files: { type: "array", items: { type: "string" } },
+  checks: checksSchema,
+});
 if (stageRuns("implement")) {
   const impl = await runs.run("implement", {
     label: `Implement issue #${issue}`,
@@ -195,11 +233,7 @@ if (stageRuns("implement")) {
     model: SONNET,
     ...withSkill(BUILD_SKILLS),
     cwd,
-    outputSchema: statusSchema({
-      summary: { type: "string" },
-      changed_files: { type: "array", items: { type: "string" } },
-      checks: checksSchema,
-    }),
+    outputSchema: implementSchema,
     task: `${COMMON}
 
   You are the IMPLEMENT stage. Implement exactly ${specPath}; it is the contract. Do not redesign.
@@ -207,19 +241,25 @@ if (stageRuns("implement")) {
   ${config.implement}
   Run these checks from ${cwdQ} and fix failures:
 ${checkList}
-  Commit in small, well-described commits. Report changed_files (paths relative to the repo root)
-  and each check's result by name ("n/a" only if the change cannot affect it).
+  Commit in small, well-described commits. A "done" report has summary (one line), changed_files
+  (paths relative to the repo root) and checks: each check's result by name ("n/a" only if the
+  change cannot affect it).
   Set status "blocked" if the spec is wrong or impossible; explain in summary.`,
   });
   implOut = impl.structuredOutput || {};
-  if (!impl.ok || implOut.status !== "done") {
-    const flag = await flagHuman("flag-implement", `Stage: implement. ${implOut.summary || impl.error || "no structured output"}`);
-    return { stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || null };
+  const implGap = doneGaps("implement", implOut, implementSchema, ["changed_files"].concat(checksField));
+  if (!impl.ok || implOut.status !== "done" || implGap) {
+    const flag = await flagHuman("flag-implement", `Stage: implement. ${implGap || implOut.summary || impl.error || "no structured output"}`);
+    return { stage: "implement", stopped: true, flagged: flag.ok, spec: specOut, implement: implOut, error: impl.error || implGap || null };
   }
 }
 
 // ---- 3a. Diff (before each review batch) ---------------------------------------------
 // Reviewers have no shell, so a Haiku worker writes the branch's diff where they can read it.
+const diffSchema = statusSchema({
+  changed_files: { type: "array", items: { type: "string" } },
+  diff_lines: { type: "integer" },
+});
 function diffRun(round) {
   const dir = `${cwd}/${REVIEW_DIR}`;
   const file = `${cwd}/${diffFile(round)}`;
@@ -229,11 +269,7 @@ function diffRun(round) {
     agent: "worker",
     model: HAIKU,
     cwd,
-    outputSchema: statusSchema({
-      summary: { type: "string" },
-      changed_files: { type: "array", items: { type: "string" } },
-      diff_lines: { type: "integer" },
-    }),
+    outputSchema: diffSchema,
     task: `${COMMON}
 
 You are the DIFF stage for review round ${round}. Do not edit, stage or commit any file in the
@@ -245,9 +281,9 @@ in order, exactly as written:
   git -C ${cwdQ} diff --no-color --no-ext-diff ${range} >> ${shellQuote(file)}
   wc -l < ${shellQuote(file)}
   git -C ${cwdQ} diff --name-only ${range}
-Report status "done", diff_lines (the number wc printed) and changed_files (the paths the last
-command printed, one per line; an empty list if it printed nothing). If a command fails, stop,
-report status "blocked" and put the command and its error in summary.`,
+Report status "done", summary (one line), diff_lines (the number wc printed) and changed_files (the
+paths the last command printed, one per line; an empty list if it printed nothing). If a command
+fails, stop, report status "blocked" and put the command and its error in summary.`,
   });
 }
 
@@ -255,8 +291,9 @@ report status "blocked" and put the command and its error in summary.`,
 // none. `record` is the round's entry in the PR's crucible record.
 function diffFor(result, round) {
   const out = result.structuredOutput || {};
-  if (result.ok && out.status === "done") {
-    const files = out.changed_files || [];
+  const gap = doneGaps("diff", out, diffSchema, ["changed_files", "diff_lines"]);
+  if (result.ok && out.status === "done" && !gap) {
+    const files = out.changed_files;
     return {
       path: `${cwd}/${diffFile(round)}`,
       lines: out.diff_lines,
@@ -264,7 +301,7 @@ function diffFor(result, round) {
       record: `${diffFile(round)} (${out.diff_lines} lines, ${files.length} files)`,
     };
   }
-  const why = String(out.summary || result.error || "no structured output").slice(0, 200);
+  const why = String(gap || out.summary || result.error || "no structured output").slice(0, 200);
   return { path: null, lines: 0, files: [], record: `unavailable: ${why}` };
 }
 
@@ -303,7 +340,8 @@ when a finding repeats one from an earlier round, say so in problem. Set locatio
 where line is the line's number in the branch's version of the file (in the diff, count from the
 +start in the hunk's @@ header), or "-" when the finding is not about one place. verdict is
 "changes" only if there is at least one blocker or major finding. Do not pad: zero findings is a
-valid review.`;
+valid review.
+${REPORT_ONCE}`;
 }
 function reviewBatch(lensList, diff, files, round, prior, note) {
   return runs.all(lensList.map((lens) => Object.assign({
@@ -345,6 +383,23 @@ let open = blocking(results, activeLenses);
 let followUps = minors(results, activeLenses);
 const history = [{ round: 0, lenses: activeLenses, diff: diff.record, blocking: open.length }];
 let round = 0;
+const reviseSchema = statusSchema({
+  responses: {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "action"],
+      properties: {
+        id: { type: "string" },
+        action: { type: "string", enum: ["fixed", "declined"] },
+        note: { type: "string" },
+      },
+    },
+  },
+  changed_files: { type: "array", items: { type: "string" } },
+  checks: checksSchema,
+});
 
 while (open.length && round < maxRounds) {
   round += 1;
@@ -354,22 +409,7 @@ while (open.length && round < maxRounds) {
     model: SONNET,
     ...withSkill(BUILD_SKILLS),
     cwd,
-    outputSchema: statusSchema({
-      responses: {
-        type: "array",
-        items: {
-          type: "object",
-          required: ["id", "action"],
-          properties: {
-            id: { type: "string" },
-            action: { type: "string", enum: ["fixed", "declined"] },
-            note: { type: "string" },
-          },
-        },
-      },
-      changed_files: { type: "array", items: { type: "string" } },
-      checks: checksSchema,
-    }),
+    outputSchema: reviseSchema,
     task: `${COMMON}
 
 You are the REVISE stage, round ${round} of at most ${maxRounds}. Address these review findings:
@@ -382,11 +422,14 @@ same commit so the spec matches the code; later issues copy it.
 Re-run the checks:
 ${checkList}
 Commit ("Address review round ${round} for #${issue}").
-Report every finding id in responses and all files you changed.`,
+A "done" report has summary (one line), every finding id in responses, changed_files (all files
+you changed) and each check's result by name. If you cannot go on, report status "blocked" and
+say why in summary.`,
   });
   const revOut = rev.structuredOutput || {};
-  if (!rev.ok || revOut.status !== "done") {
-    history.push({ round, stopped: true, error: rev.error || null });
+  const reviseGap = doneGaps("revise", revOut, reviseSchema, ["responses", "changed_files"].concat(checksField));
+  if (!rev.ok || revOut.status !== "done" || reviseGap) {
+    history.push({ round, stopped: true, error: reviseGap || reason(rev) });
     break;
   }
   files = files.length ? Array.from(new Set(files.concat(revOut.changed_files || []))) : files;
@@ -412,11 +455,30 @@ merge": never merge anything else, never merge into main, and never push, rebase
 // Every check, pass or fail: unlike implement and revise, "n/a" is not an answer here.
 const fullChecksSchema = {
   type: "object",
+  additionalProperties: false,
   required: CHECKS.map((c) => c.name),
   properties: Object.fromEntries(CHECKS.map((c) => [c.name, { type: "string", enum: ["pass", "fail"] }])),
 };
 // The tail of each failing check's output handed to the fix round.
 const FAILURE_CHARS = 3000;
+
+const integrateSchema = statusSchema({
+  main: { type: "string" },
+  merge: { type: "string", enum: ["merged", "up-to-date", "conflict"] },
+  conflicts: { type: "array", items: { type: "string" } },
+  checks: fullChecksSchema,
+  failures: {
+    type: "array",
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["check", "output"],
+      properties: { check: { type: "string" }, output: { type: "string" } },
+    },
+  },
+});
+// What a "done" integration report carries: the conflicts when the merge stopped, else the checks.
+const integrateFields = (out) => ["main", "merge"].concat(out.merge === "conflict" ? ["conflicts"] : CHECKS.length ? ["checks", "failures"] : []);
 
 function integrateRun(key, recheck) {
   return runs.run(key, {
@@ -424,21 +486,7 @@ function integrateRun(key, recheck) {
     agent: "worker",
     model: HAIKU,
     cwd,
-    outputSchema: statusSchema({
-      summary: { type: "string" },
-      main: { type: "string" },
-      merge: { type: "string", enum: ["merged", "up-to-date", "conflict"] },
-      conflicts: { type: "array", items: { type: "string" } },
-      checks: fullChecksSchema,
-      failures: {
-        type: "array",
-        items: {
-          type: "object",
-          required: ["check", "output"],
-          properties: { check: { type: "string" }, output: { type: "string" } },
-        },
-      },
-    }),
+    outputSchema: integrateSchema,
     task: `${COMMON}
 
 You are the INTEGRATION stage${recheck ? ", re-checking after the fix round" : ""}. ${MERGE_EXCEPTION}
@@ -455,8 +503,10 @@ the checks. Otherwise report merge "up-to-date" if git printed "Already up to da
 and run every one of these checks from ${cwdQ}, each to the end even when an earlier one fails:
 ${checkList}
 Report each check "pass" (it exited 0) or "fail", and for each failing check add an entry to
-failures with the check's name and the last 80 lines of its output. Report main (the commit
-rev-parse printed) and status "done", whether or not the checks pass. If any other command fails
+failures with the check's name and the last 80 lines of its output (an empty list when all pass).
+Report main (the commit rev-parse printed), summary (one line) and status "done", whether or not
+the checks pass. A "done" report has main, merge and then either conflicts or every check and
+failures; one without them is an error. If any other command fails
 (the fetch, rev-parse, or a merge that fails without conflicts), stop, report status "blocked" and
 put the command and its error in summary.`,
   });
@@ -464,23 +514,30 @@ put the command and its error in summary.`,
 
 const integrationPassed = (out) => out.merge !== "conflict" && CHECKS.every((c) => (out.checks || {})[c.name] === "pass");
 const failingChecks = (out) => CHECKS.filter((c) => (out.checks || {})[c.name] !== "pass").map((c) => c.name);
-const reason = (result) => String((result.structuredOutput || {}).summary || result.error || "no structured output").slice(0, 200);
+// The record's view of one complete integration report.
+const integrationOf = (out) => ({
+  main: out.main || null,
+  merge: out.merge || null,
+  conflicts: out.conflicts || [],
+  failing: out.merge === "conflict" ? [] : failingChecks(out),
+  checks: out.checks || {},
+});
 
-// The PR's crucible record and the run's result: what integration did.
-const integration = { status: "pass", main: null, merge: null, conflicts: [], failing: [], checks: {}, fix: null, reReview: null, note: "" };
+// The PR's crucible record and the run's result: what integration did. After a fix round and a
+// re-check, main, merge, conflicts, failing and checks are the re-check's, and firstAttempt keeps
+// the first report's view when its conflicts or failing checks differ.
+const integration = { status: "pass", main: null, merge: null, conflicts: [], failing: [], checks: {}, firstAttempt: null, fix: null, reReview: null, note: "" };
 const first = await integrateRun("integrate", false);
 const firstOut = first.structuredOutput || {};
-if (!first.ok || firstOut.status !== "done") {
+const firstGap = doneGaps("integrate", firstOut, integrateSchema, integrateFields(firstOut));
+if (!first.ok || firstOut.status !== "done" || firstGap) {
   integration.status = "error";
-  integration.note = reason(first);
+  integration.note = firstGap || reason(first);
 } else {
-  integration.main = firstOut.main || null;
-  integration.merge = firstOut.merge || null;
-  integration.conflicts = firstOut.conflicts || [];
-  integration.checks = firstOut.checks || {};
+  const firstView = integrationOf(firstOut);
+  Object.assign(integration, firstView);
   if (!integrationPassed(firstOut)) {
     const conflicted = firstOut.merge === "conflict";
-    integration.failing = conflicted ? [] : failingChecks(firstOut);
     const failures = (firstOut.failures || []).map((f) => ({ check: String(f.check), output: String(f.output).slice(-FAILURE_CHARS) }));
     const problem = conflicted
       ? `The merge conflicts in: ${integration.conflicts.join(", ")}. Nothing is merged yet. Run
@@ -489,18 +546,18 @@ resolve every conflict, then commit the merge with
   ${commitCmd} --no-edit --cleanup=strip`
       : `The merge itself is committed, but these checks fail after it: ${integration.failing.join(", ")}. The end of their output:
 ${JSON.stringify(failures, null, 2)}`;
+    const fixSchema = statusSchema({
+      changed_files: { type: "array", items: { type: "string" } },
+      non_test_files: { type: "array", items: { type: "string" } },
+      checks: fullChecksSchema,
+    });
     const fix = await runs.run("integrate-fix", {
       label: `Fix integration for issue #${issue}`,
       agent: "worker",
       model: SONNET,
       ...withSkill(BUILD_SKILLS),
       cwd,
-      outputSchema: statusSchema({
-        summary: { type: "string" },
-        changed_files: { type: "array", items: { type: "string" } },
-        non_test_files: { type: "array", items: { type: "string" } },
-        checks: fullChecksSchema,
-      }),
+      outputSchema: fixSchema,
       task: `${COMMON}
 
 You are the INTEGRATION FIX stage, the only fix round. ${MERGE_EXCEPTION}
@@ -523,28 +580,33 @@ fixtures or test data (when unsure, list the file); summary: one line on what br
 fixed it; and each check's result by name.`,
     });
     const fixOut = fix.structuredOutput || {};
-    if (!fix.ok || fixOut.status !== "done") {
+    const fixGap = doneGaps("integrate-fix", fixOut, fixSchema, ["changed_files"].concat(checksField));
+    if (!fix.ok || fixOut.status !== "done" || fixGap) {
       integration.status = "fail";
-      integration.fix = { status: "blocked", summary: reason(fix), changed_files: [], non_test_files: [] };
+      integration.fix = { status: "blocked", summary: fixGap || reason(fix), changed_files: [], non_test_files: [] };
     } else {
-      const changed = fixOut.changed_files || [];
+      const changed = fixOut.changed_files;
+      // A missing non_test_files is not a gap: every changed file is then re-reviewed.
       integration.fix = { status: "done", summary: String(fixOut.summary || "").slice(0, 300), changed_files: changed, non_test_files: fixOut.non_test_files || changed };
       files = files.length ? Array.from(new Set(files.concat(changed))) : files;
       const re = await integrateRun("integrate-recheck", true);
       const reOut = re.structuredOutput || {};
-      if (!re.ok || reOut.status !== "done") {
+      const reGap = doneGaps("integrate", reOut, integrateSchema, integrateFields(reOut));
+      if (!re.ok || reOut.status !== "done" || reGap) {
         integration.status = "error";
-        integration.note = `re-check: ${reason(re)}`;
+        integration.note = `re-check: ${reGap || reason(re)}`;
         integration.checks = fixOut.checks || integration.checks;
       } else {
+        const final = integrationOf(reOut);
+        Object.assign(integration, final);
         integration.status = integrationPassed(reOut) ? "pass" : "fail";
-        integration.main = reOut.main || integration.main;
-        integration.checks = reOut.checks || {};
+        const problem = (v) => JSON.stringify([v.conflicts, v.failing]);
+        if (problem(firstView) !== problem(final)) integration.firstAttempt = firstView;
       }
       if (integration.fix.non_test_files.length) {
         const r = round + 1;
-        const note = `This round reviews the INTEGRATION FIX. After the review rounds, origin/main${integration.main ? ` (${integration.main})` : ""} was merged
-into the branch and ${conflicted ? `conflicted in ${integration.conflicts.join(", ")}` : `these checks failed: ${integration.failing.join(", ")}`}. The fix round changed
+        const note = `This round reviews the INTEGRATION FIX. After the review rounds, origin/main${firstView.main ? ` (${firstView.main})` : ""} was merged
+into the branch and ${conflicted ? `conflicted in ${firstView.conflicts.join(", ")}` : `these checks failed: ${firstView.failing.join(", ")}`}. The fix round changed
 ${changed.join(", ") || "files it did not list"}: ${integration.fix.summary}
 Judge whether the fix is right and keeps both this branch's and main's intent. The rest of the diff
 was reviewed in earlier rounds: raise findings there only where the fix or main's changes affect it.`;
@@ -571,7 +633,8 @@ const pr = await runs.run("pr", {
   cwd,
   outputSchema: {
     type: "object",
-    required: ["pr_url"],
+    additionalProperties: false,
+    required: ["pr_url", "followup_issue"],
     properties: {
       pr_url: { type: "string" },
       draft: { type: "boolean" },
@@ -598,7 +661,9 @@ You are the PR stage. Do not change code.
      ${JSON.stringify(history)}; then an "Integration" line from ${JSON.stringify(integration)}:
      the origin/main commit merged (main) and how (merge: merged, up-to-date or conflict, naming
      the conflicts), each check's result after the merge, what the fix round did (fix; "none" when
-     null) and the re-review round (reReview; "not needed" when null). When status is not "pass",
+     null) and the re-review round (reReview; "not needed" when null). These describe the final
+     state; when firstAttempt is not null, also say what the first attempt hit before the fix round
+     (its conflicts or failing checks). When status is not "pass",
      start that line with "Does not integrate with main:" and the reason (note, the conflicts or
      the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
@@ -610,7 +675,7 @@ You are the PR stage. Do not change code.
    repository already has the label):
    gh label create ${NEEDS_HUMAN} -R ${repo} --description "Waiting on a person" 2>/dev/null || true
    gh pr edit ${branch} -R ${repo} --add-label ${NEEDS_HUMAN}
-5. Report the PR URL and the follow-up issue number.`,
+5. Report pr_url, draft, and followup_issue (the follow-up issue's number, or null).`,
 });
 const prOut = pr.structuredOutput || {};
 // No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
