@@ -200,7 +200,8 @@ const hostBlocked = await host("host-worktree").then((r) => {
 });
 const hostStep = (key) => (hostBlocked ? Promise.resolve({ ok: false, failed: false, exitCode: null, error: hostBlocked }) : host(key));
 // Reported text in inline code, so mentions and markdown in it do not render.
-const inlineCode = (text) => `\`${String(text).replace(/`/g, "'")}\``;
+// One line, no backticks: a blank line or a backtick would end the code span and let markdown render.
+const inlineCode = (text) => `\`${String(text).replace(/`/g, "'").replace(/\s+/g, " ")}\``;
 
 // Label the issue (or the branch's PR) needs:human and say why. Used on every stop. The comment is
 // a quoted heredoc, so the shell posts `why` (which holds reported text) as written.
@@ -539,7 +540,7 @@ function runChecks(prefix) {
 function integrationAttempt(recheck) {
   const pre = recheck ? "host-recheck" : "host";
   return hostStep(`${pre}-fetch`).then((fetched) => {
-    if (!fetched.ok) return { error: hostBlocked || `git fetch origin: ${fetched.error.slice(0, 200)}` };
+    if (!fetched.ok) return { error: hostBlocked || `git fetch origin && git rev-parse --short origin/main: ${fetched.error.slice(0, 200)}` };
     const fetchedMain = fetched.stdout.trim().split("\n").pop();
     if (!/^[0-9a-f]{7,40}$/.test(fetchedMain)) return { error: `git rev-parse --short origin/main after the fetch: unexpected output` };
     return integrateRun(recheck ? "integrate-recheck" : "integrate", recheck, fetchedMain).then((result) => {
@@ -728,7 +729,7 @@ You are the PR stage. Do not change code.
 const prOut = pr.structuredOutput || {};
 // No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
 if (!pr.ok || !prOut.pr_url) {
-  const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
+  const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${inlineCode(f.id)}: ${inlineCode(f.problem)}`).join("\n")}` : "";
   const integrationNote = integration.note ? `\nIntegration: ${inlineCode(integration.note)}` : "";
   const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}${integrationNote}`);
   return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };

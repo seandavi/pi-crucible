@@ -345,6 +345,8 @@ revise, integrate, PR) first runs `git -C '<worktree>' rev-parse --abbrev-ref HE
 branch, the stage changes nothing and reports blocked (the PR stage, an empty `pr_url`). Reviewers are
 read-only and have no shell, so they skip the check and read the diff the host wrote. Launch with
 the worktree as `cwd`: the host commands run there, and the workflow's first host step checks it.
+Use the real path (what `git -C <worktree> rev-parse --show-toplevel` prints) for both `worktree` and
+`cwd`, or the check fails when any part of the path is a symlink.
 
 ```js
 subagent({ workflow: "pi-crucible", async: true, cwd: "<worktree>", args: { repo, issue, slug, worktree, branch, config, lenses, seam } })

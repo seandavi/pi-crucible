@@ -421,6 +421,14 @@ test("outside the issue's worktree no other host command runs", async () => {
   assert.equal(result.draft, true);
 });
 
+test("model text in the needs:human note stays inside one code span", async () => {
+  const sneaky = "merge failed\n\n@someone **hi**";
+  const { task } = await simulate(args, happy({ integrate: { structuredOutput: { status: "blocked", summary: sneaky } }, pr: { ok: false, error: "boom" } }));
+  const flag = task("flag-pr");
+  assert.ok(!flag.includes("\n\n@someone"), "a blank line would end the code span");
+  assert.ok(flag.includes("merge failed @someone **hi**`"));
+});
+
 test("launched by path there is no host authority, and the record and the stop say why", async () => {
   const { hostCalls, result, calls, task } = await simulate(args, happy(), { raw: true });
   assert.deepEqual(hostCalls, []);
@@ -596,7 +604,7 @@ test("a check that times out or is killed fails; one that cannot run is an integ
 test("a fetch or rev-parse that fails is an integration error; a failed fetch skips the merge", async () => {
   const fetch = await simulate(args, happy(), { host: hostWith({ "host-fetch": { exit: 128, stdout: "fatal: unable to access" } }) });
   assert.ok(!keysOf(fetch.calls).includes("integrate"));
-  assert.equal(fetch.result.integration.note, "git fetch origin: Command exited with code 128. fatal: unable to access");
+  assert.equal(fetch.result.integration.note, "git fetch origin && git rev-parse --short origin/main: Command exited with code 128. fatal: unable to access");
   const heads = await simulate(args, happy(), { host: hostWith({ "host-heads": { stdout: "" } }) });
   assert.equal(heads.result.integration.status, "error");
   assert.equal(heads.result.integration.note, "git rev-parse --short origin/main HEAD: unexpected output");

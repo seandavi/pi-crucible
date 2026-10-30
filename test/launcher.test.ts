@@ -351,7 +351,7 @@ test("/crucible prepares the worktree and launches the named resource over RPC",
 test("crucible_plan and crucible_launch take the /crucible path and tell the agent not to merge (#53)", async () => {
   const repo = mkdtempSync(path.join(tmpdir(), "pi-crucible-"));
   let issueState = "OPEN";
-  const { pi, commands, tools, emitted } = fakePi(({ cmd, args }) => {
+  const { pi, commands, tools, emitted, entries } = fakePi(({ cmd, args }) => {
     const line = `${cmd} ${args.join(" ")}`;
     if (line.includes("--git-common-dir")) return { stdout: `${repo}/.git` };
     if (line.startsWith("git remote get-url")) return { stdout: "https://github.com/seandavi/pi-crucible.git" };
@@ -382,10 +382,13 @@ test("crucible_plan and crucible_launch take the /crucible path and tell the age
   assert.deepEqual(planned.details.args, dryArgs);
   assert.equal(planned.details.branch, "issue-4-diff-for-reviewers");
   assert.equal(spawns(), 0, "planning launches nothing");
+  assert.equal(entries.length, 0, "planning records no check grant");
 
   const launched = await tools.crucible_launch.execute("t2", { issue: 4 }, undefined, undefined, ctx);
   assert.equal(spawns(), 1);
   assert.equal(launched.details.runId, "run-43");
+  // An agent-launched run records the grant too, or every crucible_launch run would lose its checks.
+  assert.deepEqual(entries.map((e) => e.data.worktree), [`${repo}-worktrees/issue-4`]);
   assert.deepEqual(launched.details.lenses, ["code"]);
   assert.match(launched.content[0].text, /^Launched pi-crucible run run-43 for issue #4 \(code\)/);
   assert.ok(launched.content[0].text.includes(HOSTING), "the result says a person merges (#35)");
