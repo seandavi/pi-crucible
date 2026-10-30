@@ -84,8 +84,8 @@ still-open ones (it judges the fix, so it never clears an earlier finding) rathe
 another revise round. The checks the PR reports are the post-merge ones, and
 its crucible record gets an Integration line describing the final state: after a fix round, the
 re-check's merge, checks and failures, plus `firstAttempt` (what the first merge hit) when that
-differs. If the re-check fails, `main` and `merge` are null, `checks` are the fix's and
-`firstAttempt` holds the first view. An integrate report that says `done` without every check
+differs. If the re-check fails, `main` and `merge` are null, `checks` and `failing` are the
+fix's, and `firstAttempt` holds the first view. An integrate report that says `done` without every check
 result is an integration error, not a failing check, and gets no fix round. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 

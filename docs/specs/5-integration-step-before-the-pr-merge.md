@@ -80,8 +80,8 @@ Rules:
 - After a re-check, `main`, `merge`, `conflicts`, `failing` and `checks` are the re-check's, and
   `firstAttempt` keeps the first report's view (`{main, merge, conflicts, failing, checks}`) when
   its conflicts or failing checks differ; otherwise it is null. If the re-check fails, `main` and
-  `merge` are null, `conflicts` and `failing` are `[]`, `checks` are the fix's and `firstAttempt`
-  is the first view.
+  `merge` are null, `conflicts` is `[]`, `checks` and `failing` are the fix's, and
+  `firstAttempt` is the first view.
 - After a successful fix (`status: "done"`), the `code` lens re-reviews if the fix reported at
   least one non-test file. This happens whether the re-check passed or not. In `open`, the
   re-review's blocker/major findings are added to the earlier findings, which all stay: the

@@ -598,7 +598,7 @@ fixed it; and each check's result by name.`,
         integration.status = "error";
         integration.note = `re-check: ${reGap || reason(re)}`;
         // The final merge is unknown: only the fix's checks and the first view are.
-        Object.assign(integration, { main: null, merge: null, conflicts: [], failing: [], checks: fixOut.checks || {}, firstAttempt: firstView });
+        Object.assign(integration, { main: null, merge: null, conflicts: [], failing: failingChecks(fixOut), checks: fixOut.checks || {}, firstAttempt: firstView });
       } else {
         const final = integrationOf(reOut);
         Object.assign(integration, final);
@@ -669,8 +669,8 @@ You are the PR stage. Do not change code.
      (its conflicts or failing checks). When status is not "pass",
      start that line with "Does not integrate with main:" and the reason (note, the conflicts or
      the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".
-     Put the record's model-written text (each round's diff and error, integration's note and
-     fix.summary) in inline code, so mentions and markdown in it do not render.${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
+     Put every string a stage reported (diffs, errors, notes, summaries, revise responses) in
+     inline code, so mentions and markdown in it do not render.${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
    - "Follow-ups": one line linking the follow-up issue from step 2 (omit if none).
 4. If a PR for ${branch} already exists (gh pr view ${branch} -R ${repo}), replace its body with

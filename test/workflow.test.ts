@@ -20,8 +20,9 @@ export async function simulate(args: Record<string, unknown>, answer: (key: stri
   const run = async (key: string, opts: Opts) => {
     calls.push({ key, ...opts });
     const a = answer(key, opts);
-    if (opts.outputSchema && a.structuredOutput !== undefined && !a.invalid) {
-      assert.ok(await validates(opts.outputSchema, a.structuredOutput), `the fake ${key} report must satisfy its schema`);
+    if (opts.outputSchema && a.structuredOutput !== undefined) {
+      // A fake flagged invalid must really be invalid, so the flag can't go stale and hide drift.
+      assert.equal(await validates(opts.outputSchema, a.structuredOutput), !a.invalid, `the fake ${key} report must ${a.invalid ? "fail" : "satisfy"} its schema`);
     }
     return { ok: a.ok ?? true, structuredOutput: a.structuredOutput, error: a.error };
   };
@@ -535,7 +536,7 @@ test("a recheck that changes the result updates the record", async () => {
   assert.deepEqual(result.integration.firstAttempt, { main: "c57139f", merge: "merged", conflicts: [], failing: ["test"], checks: { test: "fail" } });
   assert.ok(task("pr").includes(JSON.stringify(result.integration)));
   assert.match(task("pr"), /when firstAttempt is not null/);
-  assert.match(task("pr"), /model-written text \(each round's diff and error, integration's note and\n\s+fix\.summary\) in inline code/);
+  assert.match(task("pr"), /every string a stage reported \(diffs, errors, notes, summaries, revise responses\) in\n\s+inline code/);
   assert.match(task("review-code-r1"), /origin\/main \(c57139f\) was merged\ninto the branch and these checks failed: test/);
 
   const same = await simulate(args, happy({ integrate: failingTest(), "integrate-recheck": failingTest() }));
