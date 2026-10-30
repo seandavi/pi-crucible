@@ -169,7 +169,9 @@ by `src/resource.ts` to have no quotes or shell metacharacters, `round` is an in
 from the issue text reaches the command.
 
 **A failed diff step never stops the run and never flags a human.** That covers `ok: false`, a
-status other than `"done"`, a missing structured output and the wrong-branch stop. The round's
+status other than `"done"`, a missing structured output, the wrong-branch stop and (#56) a `"done"`
+report without `changed_files` or `diff_lines`, recorded as
+`unavailable: diff reported "done" without: <fields>`. The round's
 reviewers fall back to the file list (below), and the factory record shows
 `unavailable: <reason>` for that round.
 
@@ -368,7 +370,8 @@ No change. `/factory 12 --dry-run` prints the same args. The launcher (`src/laun
       `r1.diff`, not `r0.diff`.
 - [ ] No review prompt tells a reviewer to run git (`--name-only` no longer appears in any review
       prompt).
-- [ ] If the diff step fails (`ok: false`, `status: "blocked"`, or no structured output), the review
+- [ ] If the diff step fails (`ok: false`, `status: "blocked"`, no structured output, or a `"done"`
+      report without `changed_files` or `diff_lines`), the review
       still runs, no `flag-*` child starts, the review prompt says the diff could not be prepared
       and lists the implement/revise changed files, and that round's `history` entry has
       `diff: "unavailable: <reason>"`.

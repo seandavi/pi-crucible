@@ -52,7 +52,11 @@ Labels the engine and its runs use:
    `subagent({ action: "validate", workflow: "<path>/workflows/crucible.js" })`.
 4. To try the engine from your checkout instead of the installed copy, start pi with
    `pi -e <checkout>/extensions/crucible.ts`. The script is re-read at each session start.
-   Don't `/reload` while a crucible run is active; resume with `options.reuseFrom` instead.
+   `/reload` during a crucible run is recoverable: pi-subagents (≥0.82) resumes the run once and
+   reuses its finished stages. Not after editing `workflows/crucible.js`, though: a named resource
+   must resolve to the same script, so the auto-resume is refused (pi-subagents docs/workflows.md,
+   "Failed lane recovery"). Don't edit the script while a run is active, or relaunch by hand with
+   `options.reuseFrom`.
 5. Keep things in step:
    - Args added or changed in `crucible.js` → update `src/resource.ts` in the same commit.
    - Config fields added or changed → update `src/config.ts`, run `npm run schema`, and update

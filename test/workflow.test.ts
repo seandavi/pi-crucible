@@ -7,14 +7,23 @@ import { loadScript } from "../src/resource.ts";
 import { engineConfig, validArgs } from "./fixtures.ts";
 
 type Opts = { agent: string; model: string; task: string; skill?: string; outputSchema?: { required?: string[] } };
-type Answer = { ok?: boolean; structuredOutput?: unknown; error?: string };
+// `invalid`: the test sends a report its stage's schema rejects on purpose.
+type Answer = { ok?: boolean; structuredOutput?: unknown; error?: string; invalid?: true };
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+const { validateStructuredOutputValue } = await import(
+  new URL("../node_modules/pi-subagents/src/runs/shared/structured-output.js", import.meta.url).href
+);
+const validates = async (schema: unknown, value: unknown) => (await validateStructuredOutputValue(schema, value)).status === "valid";
 
 export async function simulate(args: Record<string, unknown>, answer: (key: string, opts: Opts) => Answer, script = loadScript()) {
   const calls: (Opts & { key: string })[] = [];
   const run = async (key: string, opts: Opts) => {
     calls.push({ key, ...opts });
     const a = answer(key, opts);
+    if (opts.outputSchema && a.structuredOutput !== undefined) {
+      // A fake flagged invalid must really be invalid, so the flag can't go stale and hide drift.
+      assert.equal(await validates(opts.outputSchema, a.structuredOutput), !a.invalid, `the fake ${key} report must ${a.invalid ? "fail" : "satisfy"} its schema`);
+    }
     return { ok: a.ok ?? true, structuredOutput: a.structuredOutput, error: a.error };
   };
   const runs = { run, all: (list: (Opts & { key: string })[]) => Promise.all(list.map((o) => run(o.key, o))) };
@@ -104,7 +113,7 @@ test("blocker findings trigger revise and a re-review by that lens only", async 
   let round = 0;
   const { calls, task } = await simulate(args, (key, opts) => {
     if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts", problem: "p", fix: "f" }] } };
-    if (key === "revise-r1") { round++; return { structuredOutput: { status: "done", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }; }
+    if (key === "revise-r1") { round++; return { structuredOutput: { status: "done", summary: "s", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }; }
     return happy()(key);
   });
   assert.equal(round, 1);
@@ -169,7 +178,7 @@ test("only the writing stages run the worktree check; reviewers have no shell", 
 });
 
 test("a PR stage that opens no PR, or fails, flags a human and stops", async () => {
-  for (const pr of [{ structuredOutput: { pr_url: "" } }, { ok: false, error: "boom" }]) {
+  for (const pr of [{ structuredOutput: { pr_url: "", followup_issue: null } }, { ok: false, error: "boom" }]) {
     const { result, calls } = await simulate(args, happy({ pr }));
     assert.equal(calls.at(-1)?.key, "flag-pr");
     assert.equal(result.stopped, true);
@@ -184,7 +193,7 @@ const blockerOnCode = (key: string): Answer =>
   key === "review-code-r0"
     ? { structuredOutput: { verdict: "changes", findings: [{ id: "code-r0-1", severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" }] } }
     : key === "revise-r1"
-      ? { structuredOutput: { status: "done", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }
+      ? { structuredOutput: { status: "done", summary: "s", responses: [{ id: "code-r0-1", action: "fixed" }], changed_files: ["a.ts"], checks: { test: "pass" } } }
       : happy()(key);
 
 test("before each review round a Haiku worker writes an ignored diff file", async () => {
@@ -277,7 +286,8 @@ const mergeLine = "  git -C '/tmp/repo-worktrees/issue-2' merge --no-edit -m 'Me
 const integrateAnswer = (extra: Record<string, unknown>): Answer => ({
   structuredOutput: { status: "done", summary: "", main: "c57139f", merge: "merged", conflicts: [], checks: { test: "pass" }, failures: [], ...extra },
 });
-const conflict = integrateAnswer({ merge: "conflict", conflicts: ["src/tools.ts"], checks: {} });
+// A conflict report leaves out checks and failures.
+const conflict: Answer = { structuredOutput: { status: "done", summary: "", main: "c57139f", merge: "conflict", conflicts: ["src/tools.ts"] } };
 const failingTest = (output = "boom") => integrateAnswer({ checks: { test: "fail" }, failures: [{ check: "test", output }] });
 const keysOf = (calls: { key: string }[]) => calls.map((c) => c.key);
 
@@ -309,7 +319,7 @@ test("after review, a Haiku worker merges main and runs every check", async () =
 test("a clean integration needs no fix", async () => {
   const { result, calls, task } = await simulate(args, happy());
   assert.deepEqual(keysOf(calls).slice(-2), ["integrate", "pr"]);
-  assert.deepEqual(result.integration, { status: "pass", main: "c57139f", merge: "merged", conflicts: [], failing: [], checks: { test: "pass" }, fix: null, reReview: null, note: "" });
+  assert.deepEqual(result.integration, { status: "pass", main: "c57139f", merge: "merged", conflicts: [], failing: [], checks: { test: "pass" }, firstAttempt: null, fix: null, reReview: null, note: "" });
   assert.deepEqual(result.checks, { test: "pass" });
   assert.ok(task("pr").includes(JSON.stringify(result.integration)));
   assert.match(task("pr"), /"Integration" line/);
@@ -335,7 +345,8 @@ test("a conflict gets one fix round, a re-check and a code re-review", async () 
   assert.deepEqual(result.rounds.at(-1), { round: 1, lenses: ["code"], diff: ".pi/crucible-review/r1.diff (120 lines, 2 files)", blocking: 0, after: "integration fix" });
   assert.equal(result.integration.reReview, 1);
   assert.equal(result.integration.status, "pass");
-  assert.deepEqual(result.integration.conflicts, ["src/tools.ts"]);
+  assert.deepEqual(result.integration.conflicts, [], "the record is the re-check's");
+  assert.deepEqual(result.integration.firstAttempt.conflicts, ["src/tools.ts"]);
   assert.equal(result.draft, false);
 });
 
@@ -345,7 +356,8 @@ test("failing checks after the merge: the fix gets their output", async () => {
   assert.ok(task("integrate-fix").includes("END"));
   assert.ok(!task("integrate-fix").includes("x".repeat(3001)));
   assert.ok(task("integrate-fix").includes("x".repeat(2997) + "END"));
-  assert.deepEqual(result.integration.failing, ["test"]);
+  assert.deepEqual(result.integration.failing, [], "the re-check passed");
+  assert.deepEqual(result.integration.firstAttempt.failing, ["test"]);
 });
 
 test("a fix that touched only tests is not re-reviewed", async () => {
@@ -371,7 +383,7 @@ test("integration re-review findings add to earlier findings and make a draft", 
   const run = (withMinor: boolean) => simulate({ ...args, maxRounds: 1 }, (key) => {
     if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [finding("code-r0-1", "blocker")] } };
     if (key === "review-ux-r0") return { structuredOutput: { verdict: "changes", findings: [finding("ux-r0-1", "major")] } };
-    if (key === "revise-r1") return { structuredOutput: { status: "done", responses: [], changed_files: ["a.ts"], checks: { test: "pass" } } };
+    if (key === "revise-r1") return { structuredOutput: { status: "done", summary: "s", responses: [], changed_files: ["a.ts"], checks: { test: "pass" } } };
     if (key === "review-code-r1") return { structuredOutput: { verdict: "changes", findings: [finding("code-r1-1", "blocker")] } };
     if (key === "review-ux-r1") return { structuredOutput: { verdict: "changes", findings: [finding("ux-r1-1", "major")] } };
     if (key === "review-code-r2") return { structuredOutput: { verdict: "changes", findings: [finding("code-r2-1", "major"), ...(withMinor ? [finding("code-r2-2", "minor")] : [])] } };
@@ -390,7 +402,7 @@ test("an approving integration re-review does not clear earlier code findings", 
   const finding = (id: string) => ({ id, severity: "blocker", location: "a.ts:1", problem: "p", fix: "f" });
   const { result } = await simulate({ ...args, maxRounds: 1 }, (key) => {
     if (key === "review-code-r0") return { structuredOutput: { verdict: "changes", findings: [finding("code-r0-1")] } };
-    if (key === "revise-r1") return { structuredOutput: { status: "done", responses: [], changed_files: ["a.ts"], checks: { test: "pass" } } };
+    if (key === "revise-r1") return { structuredOutput: { status: "done", summary: "s", responses: [], changed_files: ["a.ts"], checks: { test: "pass" } } };
     if (key === "review-code-r1") return { structuredOutput: { verdict: "changes", findings: [finding("code-r1-1")] } };
     if (key === "integrate") return failingTest();
     return happy()(key);
@@ -443,10 +455,108 @@ test("with no checks configured, stages say so and integration still passes", as
   const config = { ...engineConfig, checks: [] };
   const { result, task } = await simulate({ ...args, config }, (key, opts) => {
     if (key === "implement") return { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"], checks: {} } };
-    if (key === "integrate") return { structuredOutput: { status: "done", main: "abc1234", merge: "up-to-date", conflicts: [], checks: {} } };
+    if (key === "integrate") return { structuredOutput: { status: "done", summary: "", main: "abc1234", merge: "up-to-date", conflicts: [], checks: {} } };
     return happy()(key);
   });
   assert.match(task("implement"), /\(none configured: say so in summary/);
   assert.equal(result.draft, false);
   assert.equal(result.integration.status, "pass");
+});
+
+// ---- Strict stage outputs (#56) --------------------------------------------------------
+// The stray report from factory-control run 91a2b4ec: a second structured_output call, last one wins.
+const stray = { status: "done", pr_url: "" };
+
+test("every stage schema is closed, so the stray second report is rejected", async () => {
+  const { calls } = await simulate(args, happy({ integrate: conflict }));
+  const closed = (schema: Record<string, unknown>, where: string): void => {
+    if (schema.type === "object") assert.equal(schema.additionalProperties, false, where);
+    for (const [k, v] of Object.entries((schema.properties ?? {}) as Record<string, Record<string, unknown>>)) closed(v, `${where}.${k}`);
+    if (schema.items) closed(schema.items as Record<string, unknown>, `${where}[]`);
+  };
+  const withSchema = calls.filter((c) => c.outputSchema);
+  assert.deepEqual(withSchema.map((c) => c.key), ["spec", "implement", "diff-r0", "review-code-r0", "review-ux-r0", "integrate", "integrate-fix", "integrate-recheck", "diff-r1", "review-code-r1", "pr"]);
+  for (const c of withSchema) {
+    closed(c.outputSchema as Record<string, unknown>, c.key);
+    assert.equal(await validates(c.outputSchema, stray), false, c.key);
+    assert.match(c.task, /Call structured_output once, as your last step, with the whole report\. A later call replaces an\nearlier one\. If a call is rejected, fix the report and call it again\./, c.key);
+  }
+  const integrate = calls.find((c) => c.key === "integrate")!.outputSchema;
+  assert.equal(await validates(integrate, happy()("integrate").structuredOutput), true);
+  assert.equal(await validates(integrate, { status: "blocked", summary: "git fetch failed" }), true, "a blocked report invents nothing");
+  assert.equal(await validates(integrate, { status: "done", summary: "", checks: { test: "pass", lint: "pass" } }), false, "no unknown check");
+});
+
+test("a done integration report without its checks is a stage error, never a fix round", async () => {
+  for (const out of [stray, { status: "done", summary: "", main: "c57139f", merge: "merged", conflicts: [], checks: {}, failures: [] }]) {
+    const { result, calls, task } = await simulate(args, happy({ integrate: { structuredOutput: out, invalid: true } }));
+    assert.deepEqual(keysOf(calls).slice(-2), ["integrate", "pr"]);
+    assert.equal(result.integration.status, "error");
+    assert.match(result.integration.note, /^integrate reported "done" without: .*checks/);
+    assert.deepEqual(result.integration.failing, []);
+    assert.equal(result.draft, true);
+    assert.match(task("pr"), /Does not integrate with main:/);
+  }
+  const { result } = await simulate(args, happy({ integrate: { structuredOutput: stray, invalid: true } }));
+  assert.equal(result.integration.note, 'integrate reported "done" without: main, merge, checks');
+  assert.ok(keysOf((await simulate(args, happy({ integrate: conflict }))).calls).includes("integrate-fix"), "a conflict carries no checks");
+  const noFailures = await simulate(args, happy({ integrate: { structuredOutput: { status: "done", summary: "", main: "c57139f", merge: "merged", conflicts: [], checks: { test: "fail" } } } }));
+  assert.equal(noFailures.result.integration.note, 'integrate reported "done" without: failures');
+
+  const recheck = await simulate(args, happy({ integrate: failingTest(), "integrate-recheck": { ...integrateAnswer({ checks: {} }), invalid: true } }));
+  assert.deepEqual(recheck.result.integration, {
+    status: "error",
+    main: null,
+    merge: null,
+    conflicts: [],
+    failing: [],
+    checks: { test: "pass" },
+    firstAttempt: { main: "c57139f", merge: "merged", conflicts: [], failing: ["test"], checks: { test: "fail" } },
+    fix: { status: "done", summary: "renamed call", changed_files: ["a.ts"], non_test_files: ["a.ts"] },
+    reReview: 1,
+    note: 're-check: integrate reported "done" without: checks.test',
+  });
+});
+
+test("an all-pass integration report needs no failures", async () => {
+  const { result, calls } = await simulate(args, happy({ integrate: { structuredOutput: { status: "done", summary: "", main: "c57139f", merge: "merged", conflicts: [], checks: { test: "pass" } } } }));
+  assert.deepEqual(keysOf(calls).slice(-2), ["integrate", "pr"]);
+  assert.equal(result.integration.status, "pass");
+  assert.equal(result.draft, false);
+});
+
+test("a recheck that changes the result updates the record", async () => {
+  const recheck = integrateAnswer({ main: "d00d00d", merge: "up-to-date" });
+  const { result, task } = await simulate(args, happy({ integrate: failingTest(), "integrate-recheck": recheck }));
+  assert.equal(result.integration.status, "pass");
+  assert.equal(result.integration.main, "d00d00d");
+  assert.equal(result.integration.merge, "up-to-date");
+  assert.deepEqual(result.integration.failing, []);
+  assert.deepEqual(result.integration.checks, { test: "pass" });
+  assert.deepEqual(result.integration.firstAttempt, { main: "c57139f", merge: "merged", conflicts: [], failing: ["test"], checks: { test: "fail" } });
+  assert.ok(task("pr").includes(JSON.stringify(result.integration)));
+  assert.match(task("pr"), /when firstAttempt is not null/);
+  assert.match(task("pr"), /every string a stage reported \(diffs, errors, notes, summaries, revise responses\) in\n\s+inline code/);
+  assert.match(task("review-code-r1"), /origin\/main \(c57139f\) was merged\ninto the branch and these checks failed: test/);
+
+  const same = await simulate(args, happy({ integrate: failingTest(), "integrate-recheck": failingTest() }));
+  assert.equal(same.result.integration.status, "fail");
+  assert.deepEqual(same.result.integration.failing, ["test"]);
+  assert.equal(same.result.integration.firstAttempt, null, "kept only when it differs");
+});
+
+test("other stages' done reports without the fields the script reads take their error paths", async () => {
+  const impl = await simulate(args, happy({ implement: { structuredOutput: { status: "done", summary: "s", changed_files: ["a.ts"] } } }));
+  assert.deepEqual(keysOf(impl.calls), ["spec", "implement", "flag-implement"]);
+  assert.match(impl.task("flag-implement"), /Stage: implement\. implement reported "done" without: checks/);
+
+  const diff = await simulate(args, happy({ "diff-r0": { structuredOutput: { status: "done", summary: "", changed_files: [] } } }));
+  assert.equal(diff.result.rounds[0].diff, 'unavailable: diff reported "done" without: diff_lines');
+
+  const revise = await simulate(args, (key) => (key === "revise-r1" ? { structuredOutput: { status: "done", summary: "", responses: [] } } : blockerOnCode(key)));
+  assert.deepEqual(revise.result.rounds[1], { round: 1, stopped: true, error: 'revise reported "done" without: changed_files, checks' });
+
+  const fix = await simulate(args, happy({ integrate: failingTest(), "integrate-fix": { structuredOutput: { status: "done", summary: "", checks: { test: "pass" } } } }));
+  assert.ok(!keysOf(fix.calls).includes("integrate-recheck"));
+  assert.equal(fix.result.integration.fix.summary, 'integrate-fix reported "done" without: changed_files');
 });

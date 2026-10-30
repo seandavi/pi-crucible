@@ -18,10 +18,22 @@ matters and the fast model where volume does. The script is
 | Implement | Sonnet | `worker` | code + tests, small commits | `{status, summary, changed_files, checks}`: one result per configured check |
 | Diff | Haiku | `worker`, before each review round | `.pi/crucible-review/r<round>.diff` in the worktree, ignored by git | `{status, summary, changed_files, diff_lines}` |
 | Review | Opus | `reviewer` (read-only), one per lens, in parallel | nothing | `{verdict, findings[]}` |
-| Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, responses[], checks}` |
+| Revise | Sonnet | `worker` | fixes for blocker/major findings, spec updates | `{status, summary, responses[], changed_files, checks}` |
 | Integrate | Haiku; Sonnet for the fix | `worker`, once after review | a merge of `origin/main` into the branch; on a conflict or failing check, one fix round and a re-check | `{status, summary, main, merge, conflicts, checks, failures}`; fix: `{status, summary, changed_files, non_test_files, checks}` |
 | PR | Sonnet | `worker` | push, follow-up issue, `gh pr create` (or edit) | `{pr_url, draft, followup_issue}` |
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
+
+**Stage reports** are closed: every output schema sets `additionalProperties: false`, and each
+stage calls `structured_output` once, at the end, and again only after a rejected call.
+pi-subagents keeps the last valid call, so this stops a stray second report (in factory-control
+#140, `{status: "done", pr_url: ""}` from the integrate stage) from replacing the real one. A stage
+with a done/blocked status requires only `status` and `summary`; the script checks the fields a
+`done` report must carry (a stage's changed files, every configured check, the diff's line count,
+integration's `main` and `merge`, and `failures` when a check failed)
+and treats a `done` without them as the stage failing, with a message such as
+`integrate reported "done" without: checks.test`. A missing check is never read as a failing one.
+The schemas use no `if`/`then`: not every model provider a config can name enforces conditional
+keywords (#56).
 
 **Review lenses** are defined per repository in `.pi/crucible.json`: a name and the text the
 reviewer is told to check. `code` is required and runs on every issue, however the run is launched (the script adds it to any
@@ -70,7 +82,11 @@ the checks again. If the fix touched files other than tests, fixtures and test d
 lens re-reviews in one more round, with its own diff; its blocker/major findings are added to the
 still-open ones (it judges the fix, so it never clears an earlier finding) rather than starting
 another revise round. The checks the PR reports are the post-merge ones, and
-its crucible record gets an Integration line. A branch that still conflicts or fails, or whose
+its crucible record gets an Integration line describing the final state: after a fix round, the
+re-check's merge, checks and failures, plus `firstAttempt` (what the first merge hit) when that
+differs. If the re-check fails, `main` and `merge` are null, `checks` and `failing` are the
+fix's, and `firstAttempt` holds the first view. An integrate report that says `done` without every check
+result is an integration error, not a failing check, and gets no fix round. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
@@ -132,7 +148,8 @@ pi install git:github.com/seandavi/pi-crucible
 The package's extension (`extensions/crucible.ts`) registers the workflow as the named
 pi-subagents resource **`pi-crucible`** in every session. To work on the engine itself, load the
 checkout instead: `pi -e ~/Documents/git/pi-crucible/extensions/crucible.ts` (after `npm install`
-there); the script is re-read on each session start, so `/reload` picks up edits.
+there); the script is re-read on each session start, so `/reload` picks up edits. Not while a run
+is active: the run auto-resumes after `/reload` only if the resource still resolves to the same script.
 
 **Named resource, not a path** (verified 2026-10-23 against pi-subagents 0.80.0). pi-subagents
 exports `registerWorkflowResource` from `pi-subagents/workflow-resources` for trusted extensions.

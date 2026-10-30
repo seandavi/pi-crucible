@@ -68,10 +68,20 @@ Rules:
   `"pass"`.
 - If `integrate` fails (`ok: false`, a status other than `"done"`, no structured output, or the
   wrong-branch stop), the integration status is `"error"`. There is no fix round.
+- A `"done"` report missing the fields the script reads counts as the stage failing (#56): for
+  `integrate` and `integrate-recheck`, `main`, `merge`, then `conflicts` (on a conflict) or every
+  configured check, plus `failures` when a check failed; for `integrate-fix`, `changed_files` and
+  every check. That makes integrate or the re-check `"error"` and the fix `"fail"`. A missing
+  check is never read as a failing one, so there is no fix round.
 - If it does not pass, `integrate-fix` (Sonnet) runs once. If the fix fails (`ok: false`, not
   `"done"`, or no output), the status is `"fail"` and there is no re-check and no re-review.
   Otherwise `integrate-recheck` (Haiku) runs. Its result decides `"pass"` or `"fail"`, or
   `"error"` if the re-check itself fails.
+- After a re-check, `main`, `merge`, `conflicts`, `failing` and `checks` are the re-check's, and
+  `firstAttempt` keeps the first report's view (`{main, merge, conflicts, failing, checks}`) when
+  its conflicts or failing checks differ; otherwise it is null. If the re-check fails, `main` and
+  `merge` are null, `conflicts` is `[]`, `checks` and `failing` are the fix's, and
+  `firstAttempt` is the first view.
 - After a successful fix (`status: "done"`), the `code` lens re-reviews if the fix reported at
   least one non-test file. This happens whether the re-check passed or not. In `open`, the
   re-review's blocker/major findings are added to the earlier findings, which all stay: the
@@ -548,7 +558,7 @@ No change. `/factory 12 --dry-run` prints the same args. `src/launcher.ts` and
       `flag-*` child and a draft PR. A failed fix gives status `"fail"`, no re-check, no re-review
       and a draft PR. A re-check that still fails gives `"fail"` and a draft PR.
 - [ ] `result.integration` (on success and on the PR-stop path) has
-      `status, main, merge, conflicts, failing, checks, fix, reReview, note`. The PR prompt contains
+      `status, main, merge, conflicts, failing, checks, firstAttempt, fix, reReview, note`. The PR prompt contains
       `JSON.stringify(integration)`, the "Integration" line instructions and
       `"Does not integrate with main:"`.
 - [ ] No other stage's prompt contains `merge --no-edit`. `CONTEXT` still says "never merge".
@@ -599,7 +609,7 @@ New tests:
    the task contains `git -c 'user.name=Pat O'\''Brien' -c 'user.email=pat@example.org' -C '/tmp/repo-worktrees/issue-2' merge --no-edit`.
 2. **"a clean integration needs no fix"**: in the happy run, keys end `integrate, pr`,
    `result.integration` deep-equals
-   `{ status: "pass", main: "c57139f", merge: "merged", conflicts: [], failing: [], checks: { test: "pass" }, fix: null, reReview: null, note: "" }`,
+   `{ status: "pass", main: "c57139f", merge: "merged", conflicts: [], failing: [], checks: { test: "pass" }, firstAttempt: null, fix: null, reReview: null, note: "" }`,
    and the PR task contains `JSON.stringify(result.integration)` and `"Integration" line`.
 3. **"a conflict gets one fix round, a re-check and a code re-review"**: `integrate` answers
    `merge: "conflict", conflicts: ["src/tools.ts"]` with no checks. The keys are
@@ -614,7 +624,9 @@ New tests:
 4. **"failing checks after the merge: the fix gets their output"**: `integrate` answers
    `checks: { test: "fail" }, failures: [{ check: "test", output: "x".repeat(5000) + "END" }]`. The
    `integrate-fix` task contains `these checks fail after it: test` and `END`, and does not
-   contain `"x".repeat(3001)`. `result.integration.failing` deep-equals `["test"]`.
+   contain `"x".repeat(3001)`. The re-check passes, so
+   `result.integration.failing` deep-equals `[]` and `result.integration.firstAttempt.failing`
+   deep-equals `["test"]`.
 5. **"a fix that touched only tests is not re-reviewed"**: the failing-check case with
    `integrate-fix` answering `changed_files: ["test/a.test.ts"], non_test_files: []`. The keys end
    `integrate, integrate-fix, integrate-recheck, pr`, and `result.integration.reReview === null`.
