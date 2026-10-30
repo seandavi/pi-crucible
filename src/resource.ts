@@ -5,16 +5,21 @@
 // is empty, so resolve prepends the validated args as `const CRUCIBLE_ARGS = {...};` and the script
 // reads them from there. resolve may not do I/O, so the extension reads the script once per session
 // and hands it in here.
+//
+// resolve also grants the run's host commands (runs.host, #57): the fixed table in hostTable below,
+// prepended as CRUCIBLE_HOST so the script runs exactly the granted strings. pi-subagents matches a
+// call to its grant by exact key and command and runs the command with `sh -c` in the workflow cwd
+// (the worktree: /crucible launches there, and the script's first host step checks it).
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { engineConfigErrors } from "./config.ts";
+import { engineConfigErrors, type EngineConfig } from "./config.ts";
 
 export const RESOURCE_NAME = "pi-crucible";
 /** The name before the rename to pi-crucible (#23); still registered so old launches resolve. */
 export const LEGACY_RESOURCE_NAME = "pi-factory";
-// 2: args are prepended to the script; 3: renamed (pi-crucible, CRUCIBLE_ARGS).
-export const RESOURCE_VERSION = 3;
+// 2: args are prepended to the script; 3: renamed (pi-crucible, CRUCIBLE_ARGS); 4: host commands.
+export const RESOURCE_VERSION = 4;
 
 /** The workflow script shipped with this package. */
 export const SCRIPT_URL = new URL("../workflows/crucible.js", import.meta.url);
@@ -27,6 +32,8 @@ type Args = Readonly<Record<string, unknown>>;
 type Check = (value: unknown) => string | null;
 
 const STAGES = ["spec", "implement", "review"];
+/** The most review rounds a run may ask for; it bounds the diff grants below. */
+export const MAX_ROUNDS = 5;
 // The worktree path is written into commands the stages run; spaces are fine (it is single-quoted there).
 const UNSAFE_PATH_CHARS = /[\x00-\x1f\x7f`$\\"';|&<>(){}*?!~]/;
 
@@ -58,7 +65,7 @@ const FIELDS: Record<string, { required: boolean; check: Check }> = {
   },
   maxRounds: {
     required: false,
-    check: (v) => (isPositiveInt(v) && v <= 5 ? null : "must be an integer 1–5"),
+    check: (v) => (isPositiveInt(v) && v <= MAX_ROUNDS ? null : `must be an integer 1–${MAX_ROUNDS}`),
   },
   seam: { required: false, check: (v) => (typeof v === "boolean" ? null : "must be a boolean") },
   startAt: {
@@ -121,15 +128,55 @@ export function argErrors(args: Args): string[] {
   return errors;
 }
 
+export const GIT_TIMEOUT_MS = 5 * 60_000;
+/** Each configured check's time limit on the host (#58 makes it configurable). */
+export const CHECK_TIMEOUT_MS = 20 * 60_000;
+/** pi-subagents' limits: grants per resource, and runs.host calls per run (one per key here). */
+export const HOST_LIMIT = 32;
+
+export type HostStep = { command: string; timeoutMs: number };
+
+/**
+ * Every host command a run may execute, by runs.host key; resolve grants exactly these. The git
+ * commands are constants. The checks are the config's strings as written: the config comes from
+ * origin/main (the launcher reads it there, never from the worktree, which a branch can edit), and
+ * the stages ran the same strings in their shell before. Nothing from issue, PR or model text
+ * reaches a command. Each key runs at most once per run, so a replay (auto-resume) repeats the
+ * same idempotent steps: the worktree check, fetch, rev-parse, diff and the checks.
+ */
+export function hostTable(config: EngineConfig): Record<string, HostStep> {
+  const git = (command: string) => ({ command, timeoutMs: GIT_TIMEOUT_MS });
+  const table: Record<string, HostStep> = {
+    "host-worktree": git("git rev-parse --show-toplevel --abbrev-ref HEAD"),
+    "host-fetch": git("git fetch origin"),
+    "host-heads": git("git rev-parse --short origin/main HEAD"),
+    "host-recheck-fetch": git("git fetch origin"),
+    "host-recheck-heads": git("git rev-parse --short origin/main HEAD"),
+  };
+  // Review rounds 0..MAX_ROUNDS, and the integration fix's re-review after the last one.
+  for (let r = 0; r <= MAX_ROUNDS + 1; r++) {
+    table[`host-diff-r${r}`] = git("git diff --no-color --no-ext-diff --numstat --shortstat -p origin/main...HEAD");
+  }
+  for (const c of config.checks) {
+    table[`check-${c.name}`] = { command: c.command, timeoutMs: CHECK_TIMEOUT_MS };
+    table[`recheck-${c.name}`] = { command: c.command, timeoutMs: CHECK_TIMEOUT_MS };
+  }
+  return table;
+}
+
 /** The resource definition for registerWorkflowResource, closed over an already-read script. */
 export function crucibleResource(script: string, name: string = RESOURCE_NAME) {
   return {
     name,
     version: RESOURCE_VERSION,
-    resolve(args: Args): { script: string } | { error: string } {
+    resolve(args: Args): { script: string; hostCommands: { key: string; command: string }[] } | { error: string } {
       const errors = argErrors(args);
       if (errors.length) return { error: `pi-crucible: ${errors.join("; ")}.` };
-      return { script: `const CRUCIBLE_ARGS = ${JSON.stringify(args)};\n${script}` };
+      const table = hostTable(args.config as EngineConfig);
+      return {
+        script: `const CRUCIBLE_ARGS = ${JSON.stringify(args)};\nconst CRUCIBLE_HOST = ${JSON.stringify(table)};\n${script}`,
+        hostCommands: Object.entries(table).map(([key, { command }]) => ({ key, command })),
+      };
     },
   };
 }

@@ -91,13 +91,14 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500,
-            "description": "Shell command, run from the worktree root."
+            "pattern": "^[^\\x00]*\\S[^\\x00]*$",
+            "description": "Shell command, run with sh from the worktree root. Integration runs it on the host exactly as written (granted from origin/main's config, never from a branch)."
           }
         },
         "additionalProperties": false
       },
       "maxItems": 8,
-      "description": "Commands every writing stage runs and reports, by name; integration runs all of them after merging main. Empty: the run reports \"no checks configured\"."
+      "description": "Commands every writing stage runs and reports, by name; after merging main, integration runs all of them as host commands. Empty: the run reports \"no checks configured\"."
     },
     "lenses": {
       "type": "object",
@@ -171,7 +172,7 @@
         "small": {
           "type": "string",
           "minLength": 1,
-          "description": "Flagging a human, writing the review diff, and the integration merge and checks (default claude-bridge/claude-haiku-5-5)."
+          "description": "Flagging a human and the integration merge (default claude-bridge/claude-haiku-5-5)."
         }
       },
       "additionalProperties": false

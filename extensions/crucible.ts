@@ -157,7 +157,8 @@ export default function (pi: ExtensionAPI) {
   /** Prepare the planned worktree and start the run. Shared by /crucible and crucible_launch. */
   async function launch(plan: Plan): Promise<{ note: string; id?: string }> {
     const note = await ensureWorktree(exec, plan, exists);
-    const data = (await rpc(pi, "spawn", { workflow: RESOURCE_NAME, args: plan.args, cwd: plan.repoRoot })) as {
+    // The workflow cwd is where its host commands run (pi-subagents has no per-step cwd): the worktree.
+    const data = (await rpc(pi, "spawn", { workflow: RESOURCE_NAME, args: plan.args, cwd: plan.worktree })) as {
       details?: { asyncId?: string; runId?: string };
     };
     return { note, id: data?.details?.asyncId ?? data?.details?.runId };

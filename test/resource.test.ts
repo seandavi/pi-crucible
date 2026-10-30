@@ -2,15 +2,44 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { registerWorkflowResource } from "pi-subagents/workflow-resources";
 import extension from "../extensions/crucible.ts";
-import { argErrors, crucibleResource, loadScript, RESOURCE_NAME } from "../src/resource.ts";
+import { argErrors, crucibleResource, hostTable, HOST_LIMIT, loadScript, MAX_ROUNDS, RESOURCE_NAME } from "../src/resource.ts";
 import { engineConfig, fakePi, validArgs } from "./fixtures.ts";
 
 const valid = validArgs;
 
-test("valid args resolve to the shipped script", () => {
+test("valid args resolve to the shipped script, with its host table and the matching grants", () => {
   const script = loadScript();
   assert.match(script, /runs\.run\("spec"/);
-  assert.deepEqual(crucibleResource(script).resolve(valid), { script: `const CRUCIBLE_ARGS = ${JSON.stringify(valid)};\n${script}` });
+  const table = hostTable(engineConfig);
+  assert.deepEqual(crucibleResource(script).resolve(valid), {
+    script: `const CRUCIBLE_ARGS = ${JSON.stringify(valid)};\nconst CRUCIBLE_HOST = ${JSON.stringify(table)};\n${script}`,
+    hostCommands: Object.entries(table).map(([key, { command }]) => ({ key, command })),
+  });
+});
+
+test("the host grant is a fixed table: git constants, then each configured check as written", () => {
+  const config = { ...engineConfig, checks: [{ name: "lint", command: "just lint" }, { name: "worker", command: "cd worker && npm ci" }] };
+  const table = hostTable(config);
+  const git = Object.entries(table).filter(([k]) => k.startsWith("host-")).map(([, v]) => v.command);
+  assert.deepEqual([...new Set(git)], [
+    "git rev-parse --show-toplevel --abbrev-ref HEAD",
+    "git fetch origin",
+    "git rev-parse --short origin/main HEAD",
+    "git diff --no-color --no-ext-diff --numstat --shortstat -p origin/main...HEAD",
+  ]);
+  const checks = Object.entries(table).filter(([k]) => !k.startsWith("host-")).map(([k, v]) => [k, v.command]);
+  assert.deepEqual(checks, [["check-lint", "just lint"], ["recheck-lint", "just lint"], ["check-worker", "cd worker && npm ci"], ["recheck-worker", "cd worker && npm ci"]]);
+  // Nothing from the issue, branch or worktree is in a command (the worktree check compares output).
+  const resolved = crucibleResource("x").resolve({ ...valid, config }) as { hostCommands: { command: string }[] };
+  for (const { command } of resolved.hostCommands) assert.doesNotMatch(command, /scaffold|bioc-mcp|issue-2|\/tmp/);
+});
+
+test(`the grants fit pi-subagents' ${HOST_LIMIT} at the most rounds and checks a config can ask for`, () => {
+  const checks = Array.from({ length: 8 }, (_, i) => ({ name: `c${i}`, command: "npm test" }));
+  const table = hostTable({ ...engineConfig, checks });
+  assert.equal(Object.keys(table).filter((k) => k.startsWith("host-diff-r")).length, MAX_ROUNDS + 2);
+  assert.ok(Object.keys(table).length <= HOST_LIMIT, `${Object.keys(table).length} grants`);
+  assert.match(argErrors({ ...valid, maxRounds: MAX_ROUNDS + 1 }).join(), /must be an integer 1–5/);
 });
 
 test("only the required args are needed", () => {
@@ -80,6 +109,7 @@ test("the pre-rename resource name pi-factory still resolves", async () => {
       const r = resolveWorkflowResource(name, valid, "legacy-session");
       assert.equal(r.ok, true, `${name}: ${r.error}`);
       assert.equal(r.resource.provenance.name, name);
+      assert.ok(r.resource.permit, "pi-subagents accepted the host grants");
     }
   } finally {
     handlers.session_shutdown({}, ctx);

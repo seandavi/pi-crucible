@@ -3,6 +3,17 @@
 Issue: [seandavi/pi-factory#4](https://github.com/seandavi/pi-factory/issues/4), part of the
 tracking issue #1 (package → launcher → **reviewers get the diff** → integration step → migrations).
 
+> **Changed by #57.** The diff is no longer written by a Haiku child. Before each review round a
+> host command (`runs.host`, granted by the `pi-crucible` resource) runs
+> `git diff --no-color --no-ext-diff --numstat --shortstat -p origin/main...HEAD`. pi-subagents
+> saves its output (up to 1 MiB) as `host-diff-r<round>.log` in the run's artifacts, so nothing is
+> written into the worktree and `.pi/crucible-review/` is gone. Reviewers get that path. The
+> changed files come from the `--numstat` lines in the first 4 KiB of stdout, and the counts from
+> `--shortstat`. The record reads `host-diff-r<n>.log (+<insertions> -<deletions> lines, <files>
+> files)` or `unavailable: <why>`, and its lines count changed lines, not lines in the file. The
+> `diff_lines`/`changed_files` report and the Haiku prompt below are history. See
+> [docs/crucible.md](../crucible.md#host-commands).
+
 ## Goal
 
 In bioc-mcp, several reviewers said they could not run git and reviewed from the changed-file list

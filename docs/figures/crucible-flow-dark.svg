@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2120 720" width="2120" height="720" role="img" aria-label="The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff (Haiku) before each round of parallel review lenses (Opus), up to two revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix round), then a PR (Sonnet) that a human merges. Spec or implement can stop and flag a human.">
-<title>The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff (Haiku) before each round of parallel review lenses (Opus), up to two revise rounds (Sonnet), integration with main (Haiku, one Sonnet fix round), then a PR (Sonnet) that a human merges. Spec or implement can stop and flag a human.</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2120 720" width="2120" height="720" role="img" aria-label="The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff (host command) before each round of parallel review lenses (Opus), up to two revise rounds (Sonnet), integration with main (Haiku merges, host commands fetch and run the checks, one Sonnet fix round), then a PR (Sonnet) that a human merges. Spec or implement can stop and flag a human.">
+<title>The pi-crucible workflow: launch, spec (Opus), implement (Sonnet), a diff (host command) before each round of parallel review lenses (Opus), up to two revise rounds (Sonnet), integration with main (Haiku merges, host commands fetch and run the checks, one Sonnet fix round), then a PR (Sonnet) that a human merges. Spec or implement can stop and flag a human.</title>
 <defs><marker id="ah-MUTED" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9198a1"/></marker><marker id="ah-VIOLET" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#b49cff"/></marker><marker id="ah-BLUE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4aa8e8"/></marker><marker id="ah-GREEN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#9fd05a"/></marker><marker id="ah-AMBER" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#f2b441"/></marker><marker id="ah-CORAL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#ff7a66"/></marker></defs>
 <rect x="30" y="110" width="240" height="175" rx="12" fill="#9198a11f" stroke="#9198a1" stroke-width="2"/>
 <text x="48" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">/crucible &lt;issue&gt;</text>
@@ -19,9 +19,9 @@
 <text x="648" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">configured checks</text>
 <rect x="930" y="80" width="280" height="286" rx="16" fill="none" stroke="#b49cff" stroke-width="1.5" stroke-dasharray="4 6" opacity="0.8"/>
 <text x="946" y="70" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#b49cff" font-weight="700" text-anchor="start" xml:space="preserve">REVIEW · PARALLEL</text>
-<rect x="950" y="100" width="240" height="46" rx="10" fill="#ff7a661f" stroke="#ff7a66" stroke-width="2"/>
-<text x="966" y="129.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">diff · Haiku</text>
-<text x="1176" y="128.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#9198a1" font-weight="400" text-anchor="end" xml:space="preserve">r&lt;n&gt;.diff</text>
+<rect x="950" y="100" width="240" height="46" rx="10" fill="#9198a11f" stroke="#9198a1" stroke-width="2"/>
+<text x="966" y="129.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">diff · host</text>
+<text x="1176" y="128.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#9198a1" font-weight="400" text-anchor="end" xml:space="preserve">git diff</text>
 <rect x="950" y="160" width="240" height="54" rx="10" fill="#b49cff1f" stroke="#b49cff" stroke-width="2"/>
 <text x="966" y="193.0" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="18" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">code</text>
 <text x="1176" y="192.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#9198a1" font-weight="400" text-anchor="end" xml:space="preserve">always</text>
@@ -33,10 +33,10 @@
 <text x="1176" y="324.0" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13" fill="#9198a1" font-weight="400" text-anchor="end" xml:space="preserve">review:&lt;lens&gt;</text>
 <rect x="1280" y="110" width="240" height="175" rx="12" fill="#ff7a661f" stroke="#ff7a66" stroke-width="2"/>
 <text x="1298" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">Integrate · Haiku</text>
-<text x="1298" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">fetch, merge</text>
-<text x="1298" y="200" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">  origin/main</text>
-<text x="1298" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">run every check</text>
-<text x="1298" y="246" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">never stops the run</text>
+<text x="1298" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">host: fetch</text>
+<text x="1298" y="200" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">Haiku: merge</text>
+<text x="1298" y="223" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">  origin/main</text>
+<text x="1298" y="246" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">host: every check</text>
 <rect x="1580" y="110" width="240" height="175" rx="12" fill="#4aa8e81f" stroke="#4aa8e8" stroke-width="2"/>
 <text x="1598" y="142" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="21" fill="#e6edf3" font-weight="650" text-anchor="start" xml:space="preserve">PR · Sonnet</text>
 <text x="1598" y="177" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="15" fill="#9198a1" font-weight="400" text-anchor="start" xml:space="preserve">push the branch</text>
@@ -110,16 +110,16 @@
 <rect x="308" y="670" width="22" height="22" rx="5" fill="#4aa8e81f" stroke="#4aa8e8" stroke-width="2"/>
 <text x="340" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">Sonnet: volume</text>
 <rect x="486" y="670" width="22" height="22" rx="5" fill="#ff7a661f" stroke="#ff7a66" stroke-width="2"/>
-<text x="518" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">Haiku: diff, merge and checks, flag a human</text>
-<rect x="925" y="670" width="22" height="22" rx="5" fill="#f2b4411f" stroke="#f2b441" stroke-width="2"/>
-<text x="957" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">a person</text>
-<rect x="1049" y="670" width="22" height="22" rx="5" fill="#9198a11f" stroke="#9198a1" stroke-width="2"/>
-<text x="1081" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">the caller</text>
-<path d="M1211,681 L1261,681" fill="none" stroke="#9198a1" stroke-width="2.5" marker-end="url(#ah-MUTED)"/>
-<text x="1271" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">next stage</text>
-<path d="M1381,681 L1431,681" fill="none" stroke="#ff7a66" stroke-width="2.5" stroke-dasharray="8 7" marker-end="url(#ah-CORAL)"/>
-<text x="1441" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">stop</text>
-<rect x="1501" y="668" width="106.8" height="26" rx="13.0" fill="#9fd05a33" stroke="#9fd05a"/>
-<text x="1554.4" y="685" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#9fd05a" font-weight="600" text-anchor="middle" xml:space="preserve">--start-at</text>
-<text x="1617.8" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">resume point</text>
+<text x="518" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">Haiku: merge, flag a human</text>
+<rect x="772" y="670" width="22" height="22" rx="5" fill="#f2b4411f" stroke="#f2b441" stroke-width="2"/>
+<text x="804" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">a person</text>
+<rect x="896" y="670" width="22" height="22" rx="5" fill="#9198a11f" stroke="#9198a1" stroke-width="2"/>
+<text x="928" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">no model: the caller, host commands</text>
+<path d="M1283,681 L1333,681" fill="none" stroke="#9198a1" stroke-width="2.5" marker-end="url(#ah-MUTED)"/>
+<text x="1343" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">next stage</text>
+<path d="M1453,681 L1503,681" fill="none" stroke="#ff7a66" stroke-width="2.5" stroke-dasharray="8 7" marker-end="url(#ah-CORAL)"/>
+<text x="1513" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">stop</text>
+<rect x="1573" y="668" width="106.8" height="26" rx="13.0" fill="#9fd05a33" stroke="#9fd05a"/>
+<text x="1626.4" y="685" font-family="'JetBrains Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14" fill="#9fd05a" font-weight="600" text-anchor="middle" xml:space="preserve">--start-at</text>
+<text x="1689.8" y="687" font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="16" fill="#e6edf3" font-weight="400" text-anchor="start" xml:space="preserve">resume point</text>
 </svg>

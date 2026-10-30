@@ -1,5 +1,6 @@
-// pi-crucible: spec (Opus) → implement (Sonnet) → [diff (Haiku) → review lenses (Opus, parallel)]
-// → revise ≤ maxRounds (Sonnet) → integrate (Haiku; one Sonnet fix round) → PR (Sonnet). See docs/crucible.md.
+// pi-crucible: spec (Opus) → implement (Sonnet) → [diff (host) → review lenses (Opus, parallel)]
+// → revise ≤ maxRounds (Sonnet) → integrate (Haiku merges, the host runs the checks; one Sonnet fix
+// round) → PR (Sonnet). See docs/crucible.md.
 //
 // args: { repo, issue, slug, worktree, branch, config, lenses?: string[], maxRounds?: number,
 //         seam?: boolean, startAt?: "spec" | "implement" | "review", parent?: number,
@@ -14,7 +15,8 @@
 // startAt: skip earlier stages. "implement" needs the spec already committed on the branch;
 // "review" re-reviews an existing branch (e.g. after hand edits) and updates its PR if one exists.
 // parent: tracking issue; the follow-up issue is added to it as a sub-issue.
-// The caller creates `worktree` on `branch` before launching; every stage runs there.
+// The caller creates `worktree` on `branch` before launching; every stage runs there, and so must the
+// workflow itself (its cwd), because that is where the host commands run.
 // Whenever the run stops for a person, the issue or PR gets the `needs:human` label.
 
 // Launched by name (the pi-crucible resource, as /crucible does), pi-subagents gives the args only to
@@ -53,10 +55,6 @@ be bypassed, a missing validation, a leaky contract) is at least "major", even i
 it yet.`
   : "";
 const specPath = `${config.specDir || "docs/specs"}/${issue}-${input.slug}.md`;
-// Where the diff step writes the diff each review round reads; its .gitignore ("*") keeps the
-// directory out of git without touching the repository's own ignore files.
-const REVIEW_DIR = ".pi/crucible-review";
-const diffFile = (round) => `${REVIEW_DIR}/r${round}.diff`;
 const CHECKS = config.checks;
 const checkList = CHECKS.length
   ? CHECKS.map((c) => `  - ${c.name}: ${c.command}`).join("\n")
@@ -79,7 +77,7 @@ Work only inside ${cwdQ}. Never touch main, never merge, never force-push, never
 Commit with: ${commitCmd}
 and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
 // The validator pins the names but cannot look at the disk: every stage that writes (spec,
-// implement, diff, revise, integrate, integrate-fix, PR; all on the worker agent, which has bash) checks that the directory really
+// implement, revise, integrate, integrate-fix, PR; all on the worker agent, which has bash) checks that the directory really
 // is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
 // they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
 const REPORT_ONCE = `Call structured_output once, as your last step, with the whole report. A later call replaces an
@@ -159,6 +157,40 @@ const reviewSchema = {
     },
   },
 };
+
+// ---- Host commands ---------------------------------------------------------------------
+// runs.host runs only what src/resource.ts grants: CRUCIBLE_HOST, key → { command, timeoutMs }, each
+// key once per run, with sh in the workflow cwd. Launched by path there is no table and no authority.
+// A command that exits nonzero or times out rejects with "Command exited with code N. <the start of
+// its output>" or "Command timed out after …ms." (200 characters at most); stdout comes back as its
+// first 4 KiB, and the full output (its first 1 MiB) is saved in the run's artifacts at outputPath.
+const HOST = typeof CRUCIBLE_HOST !== "undefined" ? CRUCIBLE_HOST : null;
+const NO_HOST = "launched without the pi-crucible resource; host steps unavailable";
+// { ok: true, stdout, outputPath } or { ok: false, failed, exitCode, error }: failed when the command
+// ran and exited nonzero (exitCode N, or "unknown" after a signal) or timed out (exitCode "timeout");
+// otherwise it could not run.
+function host(key) {
+  const step = HOST && HOST[key];
+  if (!step) return Promise.resolve({ ok: false, failed: false, exitCode: null, error: HOST ? `no host grant for ${key}` : NO_HOST });
+  return runs.host(key, { kind: "command", command: step.command, timeoutMs: step.timeoutMs }).then(
+    (r) => ({ ok: true, stdout: String(r.stdout || ""), outputPath: String(r.outputPath || "") }),
+    (e) => {
+      const error = String((e && e.message) || e).replace(/^Host command '[^']*' failed: /, "");
+      // "unknown": killed by a signal.
+      const exit = /^Command exited with code (\d+|unknown)\./.exec(error);
+      const timedOut = /^Command timed out after /.test(error);
+      return { ok: false, failed: !!exit || timedOut, exitCode: exit ? (exit[1] === "unknown" ? "unknown" : Number(exit[1])) : timedOut ? "timeout" : null, error };
+    },
+  );
+}
+// Step one: the workflow must run in the issue's worktree on its branch, or no other host command
+// runs (a hand launch from another directory would diff and check the wrong tree).
+const hostBlocked = await host("host-worktree").then((r) => {
+  if (!r.ok) return HOST ? `the worktree check failed: ${r.error.slice(0, 200)}` : NO_HOST;
+  const seen = r.stdout.trim();
+  return seen === `${cwd}\n${branch}` ? "" : `the workflow is not running in ${cwd} on ${branch} (git printed ${JSON.stringify(seen.slice(0, 200))}); host steps skipped`;
+});
+const hostStep = (key) => (hostBlocked ? Promise.resolve({ ok: false, failed: false, exitCode: null, error: hostBlocked }) : host(key));
 
 // Label the issue (or the branch's PR) needs:human and say why. Used on every stop.
 function flagHuman(key, why) {
@@ -255,54 +287,24 @@ ${checkList}
 }
 
 // ---- 3a. Diff (before each review batch) ---------------------------------------------
-// Reviewers have no shell, so a Haiku worker writes the branch's diff where they can read it.
-const diffSchema = statusSchema({
-  changed_files: { type: "array", items: { type: "string" } },
-  diff_lines: { type: "integer" },
-});
-function diffRun(round) {
-  const dir = `${cwd}/${REVIEW_DIR}`;
-  const file = `${cwd}/${diffFile(round)}`;
-  const range = "origin/main...HEAD";
-  return runs.run(`diff-r${round}`, {
-    label: `Diff for issue #${issue} r${round}`,
-    agent: "worker",
-    model: HAIKU,
-    cwd,
-    outputSchema: diffSchema,
-    task: `${COMMON}
-
-You are the DIFF stage for review round ${round}. Do not edit, stage or commit any file in the
-repository; you only write the review diff, which git ignores. Run these commands from ${cwdQ},
-in order, exactly as written:
-  mkdir -p ${shellQuote(dir)}
-  printf '*\\n' > ${shellQuote(`${dir}/.gitignore`)}
-  git -C ${cwdQ} diff --no-color --no-ext-diff --stat=200 ${range} > ${shellQuote(file)}
-  git -C ${cwdQ} diff --no-color --no-ext-diff ${range} >> ${shellQuote(file)}
-  wc -l < ${shellQuote(file)}
-  git -C ${cwdQ} diff --name-only ${range}
-Report status "done", summary (one line), diff_lines (the number wc printed) and changed_files (the
-paths the last command printed, one per line; an empty list if it printed nothing). If a command
-fails, stop, report status "blocked" and put the command and its error in summary.`,
-  });
-}
+// Reviewers have no shell, so the host writes the branch's diff to the step's log, which they read:
+// git diff --numstat --shortstat -p origin/main...HEAD, i.e. one line per file, a summary line, the
+// patch. Nothing is written into the worktree.
+const diffRun = (round) => hostStep(`host-diff-r${round}`);
 
 // What a round's reviewers get: the diff file and git's list of changed files, or why there is
-// none. `record` is the round's entry in the PR's crucible record.
-function diffFor(result, round) {
-  const out = result.structuredOutput || {};
-  const gap = doneGaps("diff", out, diffSchema, ["changed_files", "diff_lines"]);
-  if (result.ok && out.status === "done" && !gap) {
-    const files = out.changed_files;
-    return {
-      path: `${cwd}/${diffFile(round)}`,
-      lines: out.diff_lines,
-      files,
-      record: `${diffFile(round)} (${out.diff_lines} lines, ${files.length} files)`,
-    };
-  }
-  const why = String(gap || out.summary || result.error || "no structured output").slice(0, 200);
-  return { path: null, lines: 0, files: [], record: `unavailable: ${why}` };
+// none. The list and the counts come from stdout's first 4 KiB; when the summary line is not in it,
+// the list is partial and the counts unknown. `record` is the round's entry in the PR's crucible
+// record; its lines are git's insertions and deletions.
+function diffFor(result) {
+  if (!result.ok) return { path: null, files: [], partial: false, counts: "", record: `unavailable: ${result.error.slice(0, 200)}` };
+  const lines = result.stdout.split("\n");
+  const stat = lines.map((l) => /^ (\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?$/.exec(l)).find(Boolean);
+  const partial = !stat && result.stdout.trim() !== "";
+  // A cut stdout ends mid-line: drop that line.
+  const files = (partial ? lines.slice(0, -1) : lines).map((l) => /^(?:\d+|-)\t(?:\d+|-)\t(.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
+  const counts = stat ? `+${stat[2] || 0} -${stat[3] || 0} lines, ${stat[1]} files` : partial ? `${files.length}+ files` : "+0 -0 lines, 0 files";
+  return { path: result.outputPath, files, partial, counts, record: `${result.outputPath.split("/").pop()} (${counts})` };
 }
 
 // ---- 3. Review, 4. Revise (≤ maxRounds) -----------------------------------------------
@@ -321,12 +323,13 @@ disagree with stays open at its old severity.`;
 }
 function reviewTask(lens, diff, files, round, prior, note) {
   const source = diff.path
-    ? `The branch's changes are in ${diff.path}: the output of git diff origin/main...HEAD, a --stat
-summary followed by the full diff (${diff.lines} lines). You cannot run git, so this file is how you
-see the change: read all of it with your read tool, continuing with offset until the end (each read
-returns at most 2000 lines). You may skip the hunks of generated files (lockfiles, build output) the
---stat names. The watchdog_diff tool does not see commits; do not use it.
-${diff.files.length ? `Changed files: ${diff.files.join(", ")}.` : "The diff is empty: nothing on this branch differs from main."}`
+    ? `The branch's changes are in ${diff.path}: the output of git diff --numstat --shortstat -p
+origin/main...HEAD (${diff.counts}): one line per changed file (lines added, lines deleted, path), a
+summary line, then the full diff. The file holds at most its first 1 MiB and ends in "..." when cut.
+You cannot run git, so this file is how you see the change: read all of it with your read tool,
+continuing with offset until the end (each read returns at most 2000 lines). You may skip the hunks
+of generated files (lockfiles, build output). The watchdog_diff tool does not see commits; do not use it.
+${diff.files.length || diff.partial ? `Changed files${diff.partial ? " (the first of them; the list at the top of the file has all)" : ""}: ${diff.files.join(", ")}.` : "The diff is empty: nothing on this branch differs from main."}`
     : `The diff for this round could not be prepared (${diff.record}) and you cannot run git. Review ${files.length ? `the changed files: ${files.join(", ")}` : "the files the spec says change"}.`;
   return `${CONTEXT}
 
@@ -377,7 +380,7 @@ function minors(results, lensList) {
 let files = implOut.changed_files || [];
 let checks = implOut.checks || {};
 let activeLenses = lenses.slice();
-let diff = diffFor(await diffRun(0), 0);
+let diff = diffFor(await diffRun(0));
 let results = await reviewBatch(activeLenses, diff, files, 0);
 let open = blocking(results, activeLenses);
 let followUps = minors(results, activeLenses);
@@ -436,7 +439,7 @@ say why in summary.`,
   checks = revOut.checks || checks;
   const prior = { findings: open, responses: revOut.responses || [] };
   activeLenses = Array.from(new Set(open.map((f) => f.lens)));
-  diff = diffFor(await diffRun(round), round);
+  diff = diffFor(await diffRun(round));
   results = await reviewBatch(activeLenses, diff, files, round, prior);
   open = blocking(results, activeLenses);
   followUps = followUps.concat(minors(results, activeLenses));
@@ -444,9 +447,10 @@ say why in summary.`,
 }
 
 // ---- 5. Integration --------------------------------------------------------------------
-// Parallel runs pass their own checks and still break each other once merged (#5). Merge the latest
-// origin/main into the branch and run every check; on a conflict or a failure, one Sonnet fix round
-// and a re-check. The code lens re-reviews a fix that touched non-test files. Never stops the run: a
+// Parallel runs pass their own checks and still break each other once merged (#5). The host fetches
+// origin, a Haiku worker merges origin/main into the branch, and the host records main and the
+// branch head and runs every check; on a conflict or a failure, one Sonnet fix round and a re-check
+// the same way. The code lens re-reviews a fix that touched non-test files. Never stops the run: a
 // branch that does not integrate opens as a draft.
 const MERGE_MSG = `Merge origin/main into ${branch} for the integration check`;
 const mergeCmd = `${gitAs} -C ${cwdQ} merge --no-edit -m ${shellQuote(MERGE_MSG)} -m ${shellQuote("Co-Authored-By: Claude <noreply@anthropic.com>")} origin/main`;
@@ -459,28 +463,13 @@ const fullChecksSchema = {
   required: CHECKS.map((c) => c.name),
   properties: Object.fromEntries(CHECKS.map((c) => [c.name, { type: "string", enum: ["pass", "fail"] }])),
 };
-// The tail of each failing check's output handed to the fix round.
-const FAILURE_CHARS = 3000;
 
 const integrateSchema = statusSchema({
-  main: { type: "string" },
   merge: { type: "string", enum: ["merged", "up-to-date", "conflict"] },
   conflicts: { type: "array", items: { type: "string" } },
-  checks: fullChecksSchema,
-  failures: {
-    type: "array",
-    items: {
-      type: "object",
-      additionalProperties: false,
-      required: ["check", "output"],
-      properties: { check: { type: "string" }, output: { type: "string" } },
-    },
-  },
 });
-// What a "done" integration report carries: the conflicts when the merge stopped, else the checks,
-// and failures when a check failed (only the fix round reads them).
-const integrateFields = (out) => ["main", "merge"].concat(out.merge === "conflict" ? ["conflicts"]
-  : CHECKS.length ? ["checks"].concat(CHECKS.some((c) => (out.checks || {})[c.name] === "fail") ? ["failures"] : []) : []);
+// What a "done" merge report carries: the conflicts when the merge stopped.
+const integrateFields = (out) => ["merge"].concat(out.merge === "conflict" ? ["conflicts"] : []);
 
 function integrateRun(key, recheck) {
   return runs.run(key, {
@@ -492,62 +481,86 @@ function integrateRun(key, recheck) {
     task: `${COMMON}
 
 You are the INTEGRATION stage${recheck ? ", re-checking after the fix round" : ""}. ${MERGE_EXCEPTION}
-Do not edit, stage or commit anything else, and do not try to fix a failure: report it. Work in the
-foreground. Run these commands from ${cwdQ}, in order, exactly as written:
-  git -C ${cwdQ} fetch origin
-  git -C ${cwdQ} rev-parse --short origin/main
+Your only job is the merge. The workflow has fetched origin and runs the checks itself after you:
+do not fetch, do not run any check, do not edit, stage or commit anything else, and do not try to
+fix anything. Work in the foreground. Run from ${cwdQ}, exactly as written:
   ${mergeCmd}
 If the merge stops on conflicts, run
   git -C ${cwdQ} diff --name-only --diff-filter=U
   git -C ${cwdQ} merge --abort
-then report merge "conflict" and conflicts (the paths the first of those printed), do not run
-the checks, and leave checks and failures out of the report. Otherwise report merge "up-to-date" if git printed "Already up to date.", else "merged",
-and run every one of these checks from ${cwdQ}, each to the end even when an earlier one fails:
-${checkList}
-Report each check "pass" (it exited 0) or "fail", and for each failing check add an entry to
-failures with the check's name and the last 80 lines of its output (an empty list when all pass).
-Report main (the commit rev-parse printed), summary (one line) and status "done", whether or not
-the checks pass. A "done" report has main, merge and then either conflicts or every check (and
-failures when one fails); one without them is an error. If any other command fails
-(the fetch, rev-parse, or a merge that fails without conflicts), stop, report status "blocked" and
-put the command and its error in summary.`,
+then report merge "conflict" and conflicts (the paths the first of those printed). Otherwise report
+merge "up-to-date" if git printed "Already up to date.", else "merged". Report summary (one line)
+and status "done". If the merge fails without conflicts, report status "blocked" and put the
+command and its error in summary.`,
   });
 }
 
-const integrationPassed = (out) => out.merge !== "conflict" && CHECKS.every((c) => (out.checks || {})[c.name] === "pass");
-const failingChecks = (out) => CHECKS.filter((c) => (out.checks || {})[c.name] !== "pass").map((c) => c.name);
-// The record's view of one complete integration report.
-const integrationOf = (out) => ({
-  main: out.main || null,
-  merge: out.merge || null,
-  conflicts: out.conflicts || [],
-  failing: out.merge === "conflict" ? [] : failingChecks(out),
-  checks: out.checks || {},
+// Every configured check on the host, one after another and each to the end: { checks, failures,
+// error }. A check that exits nonzero or times out fails; one that cannot run at all is an error.
+function runChecks(prefix) {
+  return CHECKS.reduce((prev, c) => prev.then((acc) => hostStep(`${prefix}-${c.name}`).then((r) => {
+    acc.checks[c.name] = r.ok ? "pass" : "fail";
+    if (!r.ok && r.failed) acc.failures.push({ check: c.name, exit: r.exitCode, detail: r.error.slice(0, 200) });
+    if (!r.ok && !r.failed && !acc.error) acc.error = `check ${c.name} could not run: ${r.error.slice(0, 200)}`;
+    return acc;
+  })), Promise.resolve({ checks: {}, failures: [], error: "" }));
+}
+
+// One integration attempt: fetch (host), merge (agent), main and head (host), and unless the merge
+// conflicted every check (host). { view, checks, failures }, or { error } when a step could not run.
+function integrationAttempt(recheck) {
+  const pre = recheck ? "host-recheck" : "host";
+  return hostStep(`${pre}-fetch`).then((fetched) => {
+    if (!fetched.ok) return { error: hostBlocked || `git fetch origin: ${fetched.error.slice(0, 200)}` };
+    return integrateRun(recheck ? "integrate-recheck" : "integrate", recheck).then((result) => {
+      const out = result.structuredOutput || {};
+      const gap = doneGaps("integrate", out, integrateSchema, integrateFields(out));
+      if (!result.ok || out.status !== "done" || gap) return { error: gap || reason(result) };
+      return hostStep(`${pre}-heads`).then((heads) => {
+        const [main, head] = heads.ok ? heads.stdout.trim().split("\n") : [];
+        if (!main || !head) return { error: `git rev-parse --short origin/main HEAD: ${heads.ok ? "unexpected output" : heads.error.slice(0, 200)}` };
+        const view = { main, head, merge: out.merge, conflicts: out.merge === "conflict" ? out.conflicts : [] };
+        if (out.merge === "conflict") return { view, checks: {}, failures: [] };
+        return runChecks(recheck ? "recheck" : "check").then((ran) => (ran.error ? { error: ran.error } : { view, checks: ran.checks, failures: ran.failures }));
+      });
+    });
+  });
+}
+
+const failingChecks = (checks) => CHECKS.filter((c) => checks[c.name] !== "pass").map((c) => c.name);
+const integrationPassed = (a) => a.view.merge !== "conflict" && !failingChecks(a.checks).length;
+// The record's view of one complete attempt.
+const integrationOf = (a) => ({
+  main: a.view.main,
+  head: a.view.head,
+  merge: a.view.merge,
+  conflicts: a.view.conflicts,
+  failing: a.view.merge === "conflict" ? [] : failingChecks(a.checks),
+  checks: a.checks,
 });
 
 // The PR's crucible record and the run's result: what integration did. After a fix round and a
-// re-check, main, merge, conflicts, failing and checks are the re-check's, and firstAttempt keeps
-// the first report's view when its conflicts or failing checks differ.
-const integration = { status: "pass", main: null, merge: null, conflicts: [], failing: [], checks: {}, firstAttempt: null, fix: null, reReview: null, note: "" };
-const first = await integrateRun("integrate", false);
-const firstOut = first.structuredOutput || {};
-const firstGap = doneGaps("integrate", firstOut, integrateSchema, integrateFields(firstOut));
-if (!first.ok || firstOut.status !== "done" || firstGap) {
+// re-check, main, head, merge, conflicts, failing and checks are the re-check's, and firstAttempt
+// keeps the first attempt's view when its conflicts or failing checks differ.
+const integration = { status: "pass", main: null, head: null, merge: null, conflicts: [], failing: [], checks: {}, firstAttempt: null, fix: null, reReview: null, note: "" };
+const first = await integrationAttempt(false);
+if (first.error) {
   integration.status = "error";
-  integration.note = firstGap || reason(first);
+  integration.note = first.error;
 } else {
-  const firstView = integrationOf(firstOut);
+  const firstView = integrationOf(first);
   Object.assign(integration, firstView);
-  if (!integrationPassed(firstOut)) {
-    const conflicted = firstOut.merge === "conflict";
-    const failures = (firstOut.failures || []).map((f) => ({ check: String(f.check), output: String(f.output).slice(-FAILURE_CHARS) }));
+  if (!integrationPassed(first)) {
+    const conflicted = first.view.merge === "conflict";
     const problem = conflicted
       ? `The merge conflicts in: ${integration.conflicts.join(", ")}. Nothing is merged yet. Run
   ${mergeCmd}
 resolve every conflict, then commit the merge with
   ${commitCmd} --no-edit --cleanup=strip`
-      : `The merge itself is committed, but these checks fail after it: ${integration.failing.join(", ")}. The end of their output:
-${JSON.stringify(failures, null, 2)}`;
+      : `The merge itself is committed, but these checks fail after it: ${integration.failing.join(", ")}. Each one's exit
+code ("timeout" if it ran out of time) and the start of its output, cut to 200 characters:
+${JSON.stringify(first.failures, null, 2)}
+That is not the full output: run each failing check yourself to see it.`;
     const fixSchema = statusSchema({
       changed_files: { type: "array", items: { type: "string" } },
       non_test_files: { type: "array", items: { type: "string" } },
@@ -563,7 +576,7 @@ ${JSON.stringify(failures, null, 2)}`;
       task: `${COMMON}
 
 You are the INTEGRATION FIX stage, the only fix round. ${MERGE_EXCEPTION}
-After review, merging origin/main${integration.main ? ` (${integration.main})` : ""} into ${branch} broke it.
+After review, merging origin/main (${integration.main}) into ${branch} broke it.
 ${problem}
 The break comes from combining this branch with changes that reached main after it was cut. Make the
 branch work with main as it is now: keep both sides' intent, never revert or weaken main's changes,
@@ -591,29 +604,28 @@ fixed it; and each check's result by name.`,
       // A missing non_test_files is not a gap: every changed file is then re-reviewed.
       integration.fix = { status: "done", summary: String(fixOut.summary || "").slice(0, 300), changed_files: changed, non_test_files: fixOut.non_test_files || changed };
       files = files.length ? Array.from(new Set(files.concat(changed))) : files;
-      const re = await integrateRun("integrate-recheck", true);
-      const reOut = re.structuredOutput || {};
-      const reGap = doneGaps("integrate", reOut, integrateSchema, integrateFields(reOut));
-      if (!re.ok || reOut.status !== "done" || reGap) {
+      const re = await integrationAttempt(true);
+      if (re.error) {
         integration.status = "error";
-        integration.note = `re-check: ${reGap || reason(re)}`;
+        integration.note = `re-check: ${re.error}`;
         // The final merge is unknown: only the fix's checks and the first view are.
-        Object.assign(integration, { main: null, merge: null, conflicts: [], failing: failingChecks(fixOut), checks: fixOut.checks || {}, firstAttempt: firstView });
+        const fixChecks = fixOut.checks || {};
+        Object.assign(integration, { main: null, head: null, merge: null, conflicts: [], failing: failingChecks(fixChecks), checks: fixChecks, firstAttempt: firstView });
       } else {
-        const final = integrationOf(reOut);
+        const final = integrationOf(re);
         Object.assign(integration, final);
-        integration.status = integrationPassed(reOut) ? "pass" : "fail";
+        integration.status = integrationPassed(re) ? "pass" : "fail";
         const hit = (v) => JSON.stringify([v.conflicts, v.failing]);
         if (hit(firstView) !== hit(final)) integration.firstAttempt = firstView;
       }
       if (integration.fix.non_test_files.length) {
         const r = round + 1;
-        const note = `This round reviews the INTEGRATION FIX. After the review rounds, origin/main${firstView.main ? ` (${firstView.main})` : ""} was merged
+        const note = `This round reviews the INTEGRATION FIX. After the review rounds, origin/main (${firstView.main}) was merged
 into the branch and ${conflicted ? `conflicted in ${firstView.conflicts.join(", ")}` : `these checks failed: ${firstView.failing.join(", ")}`}. The fix round changed
 ${changed.join(", ") || "files it did not list"}: ${integration.fix.summary}
 Judge whether the fix is right and keeps both this branch's and main's intent. The rest of the diff
 was reviewed in earlier rounds: raise findings there only where the fix or main's changes affect it.`;
-        diff = diffFor(await diffRun(r), r);
+        diff = diffFor(await diffRun(r));
         const fixReview = await reviewBatch(["code"], diff, files, r, null, note);
         const fixBlocking = blocking(fixReview, ["code"]);
         open = open.concat(fixBlocking);
@@ -662,10 +674,11 @@ You are the PR stage. Do not change code.
      reviewers read, blocking findings, what was fixed or declined, one line each; a row with
      "after": "integration fix" is the code lens re-reviewing the integration fix) from
      ${JSON.stringify(history)}; then an "Integration" line from ${JSON.stringify(integration)}:
-     the origin/main commit merged (main) and how (merge: merged, up-to-date or conflict, naming
-     the conflicts), each check's result after the merge, what the fix round did (fix; "none" when
-     null) and the re-review round (reReview; "not needed" when null). These describe the final
-     state (main and merge are null when the re-check failed); when firstAttempt is not null, also say what the first attempt hit before the fix round
+     the origin/main commit merged (main), the branch commit the checks ran on (head) and how it
+     merged (merge: merged, up-to-date or conflict, naming the conflicts), each check's result
+     after the merge, what the fix round did (fix; "none" when null) and the re-review round
+     (reReview; "not needed" when null). These describe the final state (main, head and merge are
+     null when the re-check failed); when firstAttempt is not null, also say what the first attempt hit before the fix round
      (its conflicts or failing checks). When status is not "pass",
      start that line with "Does not integrate with main:" and the reason (note, the conflicts or
      the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".
@@ -686,7 +699,8 @@ const prOut = pr.structuredOutput || {};
 // No PR means nothing carries needs:human, so the stop has to be flagged on the issue.
 if (!pr.ok || !prOut.pr_url) {
   const unresolvedNote = open.length ? `\nUnresolved findings:\n${open.map((f) => `- ${f.id}: ${f.problem}`).join("\n")}` : "";
-  const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}`);
+  const integrationNote = integration.note ? `\nIntegration: ${integration.note}` : "";
+  const flag = await flagHuman("flag-pr", `Stage: pr. ${pr.error || "No PR was opened (see the PR stage's output; a worktree on the wrong branch stops it)."}${unresolvedNote}${integrationNote}`);
   return { stage: "pr", stopped: true, flagged: flag.ok, rounds: history, unresolved: open, checks, integration, error: pr.error || null, engine: input.engine || null };
 }
 
