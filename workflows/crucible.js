@@ -82,8 +82,8 @@ and add the trailer "Co-Authored-By: Claude <noreply@anthropic.com>".`;
 // implement, diff, revise, integrate, integrate-fix, PR; all on the worker agent, which has bash) checks that the directory really
 // is the issue's worktree before it does anything else. Reviewers are read-only and have no bash, so
 // they get CONTEXT alone. A PR stage that stops here opens no PR, which the script flags below.
-const REPORT_ONCE = `Call structured_output exactly once, as your last step, with the whole report: a later call
-replaces an earlier one, and a report with fields its schema does not name is rejected.`;
+const REPORT_ONCE = `Call structured_output once, as your last step, with the whole report. A later call replaces an
+earlier one. If a call is rejected, fix the report and call it again.`;
 const COMMON = `${CONTEXT}
 BEFORE ANYTHING ELSE run: git -C ${cwdQ} rev-parse --abbrev-ref HEAD
 If the output is not exactly ${branch}, change nothing and stop: a stage with a status reports
@@ -477,8 +477,10 @@ const integrateSchema = statusSchema({
     },
   },
 });
-// What a "done" integration report carries: the conflicts when the merge stopped, else the checks.
-const integrateFields = (out) => ["main", "merge"].concat(out.merge === "conflict" ? ["conflicts"] : CHECKS.length ? ["checks", "failures"] : []);
+// What a "done" integration report carries: the conflicts when the merge stopped, else the checks,
+// and failures when a check failed (only the fix round reads them).
+const integrateFields = (out) => ["main", "merge"].concat(out.merge === "conflict" ? ["conflicts"]
+  : CHECKS.length ? ["checks"].concat(CHECKS.some((c) => (out.checks || {})[c.name] === "fail") ? ["failures"] : []) : []);
 
 function integrateRun(key, recheck) {
   return runs.run(key, {
@@ -498,15 +500,15 @@ foreground. Run these commands from ${cwdQ}, in order, exactly as written:
 If the merge stops on conflicts, run
   git -C ${cwdQ} diff --name-only --diff-filter=U
   git -C ${cwdQ} merge --abort
-then report merge "conflict" and conflicts (the paths the first of those printed), and do not run
-the checks. Otherwise report merge "up-to-date" if git printed "Already up to date.", else "merged",
+then report merge "conflict" and conflicts (the paths the first of those printed), do not run
+the checks, and leave checks and failures out of the report. Otherwise report merge "up-to-date" if git printed "Already up to date.", else "merged",
 and run every one of these checks from ${cwdQ}, each to the end even when an earlier one fails:
 ${checkList}
 Report each check "pass" (it exited 0) or "fail", and for each failing check add an entry to
 failures with the check's name and the last 80 lines of its output (an empty list when all pass).
 Report main (the commit rev-parse printed), summary (one line) and status "done", whether or not
-the checks pass. A "done" report has main, merge and then either conflicts or every check and
-failures; one without them is an error. If any other command fails
+the checks pass. A "done" report has main, merge and then either conflicts or every check (and
+failures when one fails); one without them is an error. If any other command fails
 (the fetch, rev-parse, or a merge that fails without conflicts), stop, report status "blocked" and
 put the command and its error in summary.`,
   });
@@ -595,13 +597,14 @@ fixed it; and each check's result by name.`,
       if (!re.ok || reOut.status !== "done" || reGap) {
         integration.status = "error";
         integration.note = `re-check: ${reGap || reason(re)}`;
-        integration.checks = fixOut.checks || integration.checks;
+        // The final merge is unknown: only the fix's checks and the first view are.
+        Object.assign(integration, { main: null, merge: null, conflicts: [], failing: [], checks: fixOut.checks || {}, firstAttempt: firstView });
       } else {
         const final = integrationOf(reOut);
         Object.assign(integration, final);
         integration.status = integrationPassed(reOut) ? "pass" : "fail";
-        const problem = (v) => JSON.stringify([v.conflicts, v.failing]);
-        if (problem(firstView) !== problem(final)) integration.firstAttempt = firstView;
+        const hit = (v) => JSON.stringify([v.conflicts, v.failing]);
+        if (hit(firstView) !== hit(final)) integration.firstAttempt = firstView;
       }
       if (integration.fix.non_test_files.length) {
         const r = round + 1;
@@ -662,10 +665,12 @@ You are the PR stage. Do not change code.
      the origin/main commit merged (main) and how (merge: merged, up-to-date or conflict, naming
      the conflicts), each check's result after the merge, what the fix round did (fix; "none" when
      null) and the re-review round (reReview; "not needed" when null). These describe the final
-     state; when firstAttempt is not null, also say what the first attempt hit before the fix round
+     state (main and merge are null when the re-check failed); when firstAttempt is not null, also say what the first attempt hit before the fix round
      (its conflicts or failing checks). When status is not "pass",
      start that line with "Does not integrate with main:" and the reason (note, the conflicts or
-     the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
+     the failing checks). Then the checks ${JSON.stringify(checks)}; then the line "Engine: ${engineNote}".
+     Put the record's model-written text (each round's diff and error, integration's note and
+     fix.summary) in inline code, so mentions and markdown in it do not render.${startAt !== "spec" ? ` Note that this run started at the ${startAt} stage.` : ""}
    ${open.length ? `- "Unresolved review findings": one bullet per finding from ${JSON.stringify(open)}.` : ""}
    - "Follow-ups": one line linking the follow-up issue from step 2 (omit if none).
 4. If a PR for ${branch} already exists (gh pr view ${branch} -R ${repo}), replace its body with

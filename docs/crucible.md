@@ -24,11 +24,12 @@ matters and the fast model where volume does. The script is
 | Flag | Haiku | `worker` | `needs:human` label + comment on the issue | — |
 
 **Stage reports** are closed: every output schema sets `additionalProperties: false`, and each
-stage calls `structured_output` once, at the end. pi-subagents keeps the last valid call, so this
-stops a stray second report (in factory-control #140, `{status: "done", pr_url: ""}` from the
-integrate stage) from replacing the real one. A schema requires only what a `blocked` report has
-too (`status`, `summary`); the script checks the fields a `done` report must carry (a stage's
-changed files, every configured check, the diff's line count, integration's `main` and `merge`)
+stage calls `structured_output` once, at the end, and again only after a rejected call.
+pi-subagents keeps the last valid call, so this stops a stray second report (in factory-control
+#140, `{status: "done", pr_url: ""}` from the integrate stage) from replacing the real one. A stage
+with a done/blocked status requires only `status` and `summary`; the script checks the fields a
+`done` report must carry (a stage's changed files, every configured check, the diff's line count,
+integration's `main` and `merge`, and `failures` when a check failed)
 and treats a `done` without them as the stage failing, with a message such as
 `integrate reported "done" without: checks.test`. A missing check is never read as a failing one.
 The schemas use no `if`/`then`: not every model provider a config can name enforces conditional
@@ -83,8 +84,9 @@ still-open ones (it judges the fix, so it never clears an earlier finding) rathe
 another revise round. The checks the PR reports are the post-merge ones, and
 its crucible record gets an Integration line describing the final state: after a fix round, the
 re-check's merge, checks and failures, plus `firstAttempt` (what the first merge hit) when that
-differs. An integrate report that says `done` without every check result is an integration error,
-not a failing check, and gets no fix round. A branch that still conflicts or fails, or whose
+differs. If the re-check fails, `main` and `merge` are null, `checks` are the fix's and
+`firstAttempt` holds the first view. An integrate report that says `done` without every check
+result is an integration error, not a failing check, and gets no fix round. A branch that still conflicts or fails, or whose
 integration could not run, opens as a draft PR saying why; the run does not stop (#5).
 
 **Stops:** a spec with blocking questions stops the run before any code is written; an
