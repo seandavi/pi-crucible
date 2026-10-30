@@ -5,7 +5,7 @@ tracking issue #1 (package → launcher → reviewers get the diff → **integra
 migrations). Labelled `seam`: every consuming repository's runs go through this stage.
 
 > **Changed by #57.** The fetch and the checks are now host commands (`runs.host`), and so is
-> recording main and the branch head (`git rev-parse --short origin/main HEAD`, which adds `head`
+> recording main and the branch head (`git rev-parse origin/main HEAD`, shortened to 7 characters by the script, which adds `head`
 > to the Integration record). The fetch step also prints `origin/main`'s commit, which the merge
 > task names, so a resume after main moved merges again. The Haiku worker only merges
 > `origin/main` (or reports the conflicts), and its report is `{status, summary, merge, conflicts}`.

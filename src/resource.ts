@@ -161,7 +161,8 @@ export function hostTable(checks: readonly Check[]): Record<string, HostStep> {
   // The fetch prints the fetched origin/main, which the merge task names: a main that moved
   // between a run and its resume changes that task, so the merge runs again.
   const fetch = `${GIT} fetch origin && ${GIT} rev-parse --short origin/main`;
-  const heads = `${GIT} rev-parse --short origin/main HEAD`;
+  // ponytail: --short implies --verify, which takes one revision; print full shas, shorten in the script.
+  const heads = `${GIT} rev-parse origin/main HEAD`;
   const table: Record<string, HostStep> = {
     "host-worktree": git(`${GIT} rev-parse --show-toplevel --abbrev-ref HEAD`),
     // Its output is the .gitignore. pi-subagents writes an output only inside the workflow cwd and

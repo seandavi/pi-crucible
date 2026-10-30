@@ -35,7 +35,7 @@ test("the host grant is a fixed table: hardened git constants, the review direct
     `${G} rev-parse --show-toplevel --abbrev-ref HEAD`,
     "echo '*'",
     `${G} fetch origin && ${G} rev-parse --short origin/main`,
-    `${G} rev-parse --short origin/main HEAD`,
+    `${G} rev-parse origin/main HEAD`,
     `${G} diff --no-color --no-ext-diff --no-textconv --numstat --shortstat -p origin/main...HEAD`,
   ]);
   assert.equal(table["host-review-ignore"].output, ".pi/crucible-review/.gitignore");
